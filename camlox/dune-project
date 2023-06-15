@@ -1,0 +1,26 @@
+(lang dune 3.8)
+
+(name camlox)
+
+(generate_opam_files true)
+
+(source
+ (github davidhollis/crafting-interpreters))
+
+(authors "David Hollis")
+
+(maintainers "David Hollis")
+
+(license LICENSE)
+
+(documentation https://github.com/davidhollis/crafting-interpreters)
+
+(package
+ (name camlox)
+ (synopsis "A tiny lox interpreter following the model in part 1 of _Crafting Interpreters_.")
+ (description "A tiny lox interpreter following the model in part 1 of _Crafting Interpreters_.")
+ (depends ocaml dune)
+ (tags
+  (language interpreter)))
+
+; See the complete stanza docs at https://dune.readthedocs.io/en/stable/dune-files.html#dune-project
