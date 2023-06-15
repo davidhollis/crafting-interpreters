@@ -19,7 +19,7 @@
  (name camlox)
  (synopsis "A tiny lox interpreter following the model in part 1 of _Crafting Interpreters_.")
  (description "A tiny lox interpreter following the model in part 1 of _Crafting Interpreters_.")
- (depends ocaml dune)
+ (depends ocaml dune base)
  (tags
   (language interpreter)))
 

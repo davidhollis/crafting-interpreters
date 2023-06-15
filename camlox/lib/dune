@@ -1,2 +1,3 @@
 (library
- (name camlox))
+ (name camlox)
+ (libraries base stdio))
