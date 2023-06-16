@@ -97,6 +97,27 @@ let scan_identifier scanner =
   done;
   Some (make_token scanner (Token.type_of_word (current_lexeme scanner)))
 
+let consume_block_comment scanner =
+  let rec consume_block_comment_aux depth =
+    if is_at_end scanner then
+      Errors.report scanner.error_reporter scanner.current_line ""
+        "Hit EOF while scanning block comment"
+    else
+      match advance scanner with
+      | '/' ->
+          if match_next scanner '*' then consume_block_comment_aux (depth + 1)
+          else consume_block_comment_aux depth
+      | '\n' ->
+          scanner.current_line <- scanner.current_line + 1;
+          consume_block_comment_aux depth
+      | '*' ->
+          if match_next scanner '/' then (
+            if depth > 1 then consume_block_comment_aux (depth - 1))
+          else consume_block_comment_aux depth
+      | _ -> consume_block_comment_aux depth
+  in
+  consume_block_comment_aux 1
+
 let rec scan_next scanner =
   scanner.current_token_start <- scanner.current_offset;
   if is_at_end scanner then None
@@ -129,6 +150,9 @@ let rec scan_next scanner =
     | '/' ->
         if match_next scanner '/' then (
           consume_until scanner '\n';
+          scan_next scanner)
+        else if match_next scanner '*' then (
+          consume_block_comment scanner;
           scan_next scanner)
         else Some (make_token scanner Token.Slash)
     | ' ' | '\r' | '\t' ->
