@@ -1,4 +1,4 @@
-(executable
- (public_name camlox)
- (name main)
+(executables
+ (public_names camlox ast-test)
+ (names main ast_test)
  (libraries camlox))
