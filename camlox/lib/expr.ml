@@ -46,10 +46,10 @@ module Printer = struct
     Buffer.contents (print_item (Buffer.create 256) 0 name children)
 
   let name = function
-    | Binary (_, op, _) -> Token.describe op
+    | Binary (_, op, _) -> Token.print op
     | Grouping _ -> "group"
     | Literal tok -> Token.describe tok
-    | Unary (op, _) -> Token.describe op
+    | Unary (op, _) -> "unary " ^ (Token.print op)
 
   let children = function
     | Binary (left, _, right) -> [ left; right ]

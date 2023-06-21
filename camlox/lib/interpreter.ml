@@ -1,4 +1,4 @@
-open Base
+(* open Base *)
 open Stdio
 
 type state = { error_reporter : Errors.t }
@@ -7,8 +7,10 @@ let empty_state () = { error_reporter = Errors.create () }
 
 let run state s =
   let scanner = Scanner.create state.error_reporter s in
-  Scanner.scan_all scanner
-  |> List.iter ~f:(Fn.compose print_endline Token.describe)
+  let parser = Parser.create state.error_reporter (Scanner.scan_all scanner) in
+  match Parser.parse parser with
+  | Some expr -> print_endline (Expr.Printer.print_braces expr)
+  | None -> prerr_endline "Encountered one or more errors."
 
 let run_file path =
   let interpreter_state = empty_state () in
