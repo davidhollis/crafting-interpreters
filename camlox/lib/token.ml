@@ -76,8 +76,7 @@ let describe tok =
     (fun () -> show_token_type)
     tok.tpe tok.lexeme tok.line
 
-let print tok =
-  tok.lexeme
+let print tok = tok.lexeme
 
 let has_type tok tpe =
   match (tok, tpe) with

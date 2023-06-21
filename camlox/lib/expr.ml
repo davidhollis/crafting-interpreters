@@ -6,6 +6,27 @@ type t =
   | Literal of Token.t (* <string>|<number>|<identifier> *)
   | Unary of Token.t * t (* <op> <expr> *)
 
+module Value = struct
+  type t = Number of float | String of string | Boolean of bool | Nil
+  [@@deriving show]
+
+  let is_truthy = function Boolean false | Nil -> false | _ -> true
+
+  let equal a b =
+    match (a, b) with
+    | Number na, Number nb ->
+        let open Float in
+        na = nb
+    | String sa, String sb ->
+        let open String in
+        sa = sb
+    | Boolean ba, Boolean bb ->
+        let open Bool in
+        ba = bb
+    | Nil, Nil -> true
+    | _ -> false
+end
+
 module Printer = struct
   type t = {
     item_start : string;
@@ -49,7 +70,7 @@ module Printer = struct
     | Binary (_, op, _) -> Token.print op
     | Grouping _ -> "group"
     | Literal tok -> Token.describe tok
-    | Unary (op, _) -> "unary " ^ (Token.print op)
+    | Unary (op, _) -> "unary " ^ Token.print op
 
   let children = function
     | Binary (left, _, right) -> [ left; right ]

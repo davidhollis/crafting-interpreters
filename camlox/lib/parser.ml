@@ -25,7 +25,8 @@ let parse_error parser message =
   fail `ParseError
 
 let advance parser =
-  if not (is_at_end parser) then parser.current_token <- parser.current_token + 1;
+  if not (is_at_end parser) then
+    parser.current_token <- parser.current_token + 1;
   previous parser
 
 let check parser token_type =
