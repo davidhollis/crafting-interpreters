@@ -1,10 +1,16 @@
 open Base
 
-type t =
-  | Binary of t * Token.t * t (* <expr> <op> <expr> *)
-  | Grouping of t (* (<expr>) *)
-  | Literal of Token.t (* <string>|<number>|<identifier> *)
-  | Unary of Token.t * t (* <op> <expr> *)
+module Expr = struct
+  type t =
+    | Binary of t * Token.t * t (* <expr> <op> <expr> *)
+    | Grouping of t (* (<expr>) *)
+    | Literal of Token.t (* <string>|<number>|<identifier> *)
+    | Unary of Token.t * t (* <op> <expr> *)
+end
+
+module Stmt = struct
+  type t = Expression of Expr.t | Print of Expr.t
+end
 
 module Value = struct
   type t = Number of float | String of string | Boolean of bool | Nil
@@ -67,16 +73,16 @@ module Printer = struct
     Buffer.contents (print_item (Buffer.create 256) 0 name children)
 
   let name = function
-    | Binary (_, op, _) -> Token.print op
-    | Grouping _ -> "group"
-    | Literal tok -> Token.describe tok
-    | Unary (op, _) -> "unary " ^ Token.print op
+    | Expr.Binary (_, op, _) -> Token.print op
+    | Expr.Grouping _ -> "group"
+    | Expr.Literal tok -> Token.describe tok
+    | Expr.Unary (op, _) -> "unary " ^ Token.print op
 
   let children = function
-    | Binary (left, _, right) -> [ left; right ]
-    | Grouping expr -> [ expr ]
-    | Literal _ -> []
-    | Unary (_, expr) -> [ expr ]
+    | Expr.Binary (left, _, right) -> [ left; right ]
+    | Expr.Grouping expr -> [ expr ]
+    | Expr.Literal _ -> []
+    | Expr.Unary (_, expr) -> [ expr ]
 
   let render_expr p expr = p (name expr) (children expr)
 

@@ -1,5 +1,6 @@
 open Base
 open Result
+open Ast
 
 type t = {
   error_reporter : Errors.t;
@@ -91,5 +92,25 @@ and parse_primary parser =
              "expected closing paren ')' after expression"
            |> map ~f:(fun () -> Expr.Grouping inner))
   else parse_error parser "expected some kind of expression"
+
+let rec parse_program parser =
+  let rec parse_statement_sequence stmts =
+    if is_at_end parser then return (List.rev stmts)
+    else parse_statement parser >>= fun next_stmt -> parse_statement_sequence (next_stmt :: stmts)
+  in parse_statement_sequence []
+
+and parse_statement parser =
+  if match_any parser [Token.Print] then parse_print_stmt parser
+  else parse_expr_stmt parser
+
+and parse_print_stmt parser =
+  parse_expression parser >>= fun expr ->
+  consume parser Token.Semicolon "expected semicolon at the end of a print statement" >>= fun () ->
+  return (Stmt.Print expr)
+
+and parse_expr_stmt parser =
+  parse_expression parser >>= fun expr ->
+  consume parser Token.Semicolon "expected semicolon at the end of an expression statement" >>= fun () ->
+  return (Stmt.Expression expr)
 
 let parse parser = ok (parse_expression parser)
