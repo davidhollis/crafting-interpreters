@@ -1,19 +1,31 @@
 open Base
 open Stdio
+open Result
 
-type state = { error_reporter : Errors.t; interpreter : Tree_walker.t }
+type state = {
+  error_reporter : Errors.t;
+  scanner : Scanner.t;
+  parser : Parser.t;
+  interpreter : Tree_walker.t;
+}
 
 let empty_state () =
   let error_reporter = Errors.create () in
-  { error_reporter; interpreter = Tree_walker.create error_reporter }
+  {
+    error_reporter;
+    scanner = Scanner.create error_reporter;
+    parser = Parser.create error_reporter;
+    interpreter = Tree_walker.create error_reporter;
+  }
 
-let run state s =
-  let open Option in
-  let scanner = Scanner.create state.error_reporter s in
-  let parser = Parser.create state.error_reporter (Scanner.scan_all scanner) in
-  match Parser.parse parser >>= Tree_walker.evaluate_expr state.interpreter with
-  | Some value -> print_endline ("==> " ^ Ast.Value.show value)
-  | None -> prerr_endline "Encountered one or more errors."
+let run state program_str =
+  program_str
+  |> Scanner.scan_all state.scanner
+  >>= Parser.parse state.parser
+  >>= Tree_walker.run_program state.interpreter
+  |> function
+  | Ok () -> print_endline ""
+  | _ -> prerr_endline "Encountered one or more errors."
 
 let run_file path =
   let interpreter_state = empty_state () in

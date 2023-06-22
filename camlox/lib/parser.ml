@@ -4,13 +4,11 @@ open Ast
 
 type t = {
   error_reporter : Errors.t;
-  tokens : Token.t array;
+  mutable tokens : Token.t array;
   mutable current_token : int;
 }
 
-let create error_reporter tokens =
-  { error_reporter; tokens = Array.of_list tokens; current_token = 0 }
-
+let create error_reporter = { error_reporter; tokens = [||]; current_token = 0 }
 let peek parser = parser.tokens.(parser.current_token)
 let previous parser = parser.tokens.(parser.current_token - 1)
 let is_at_end parser = Token.has_type (peek parser) Token.EOF
@@ -96,21 +94,28 @@ and parse_primary parser =
 let rec parse_program parser =
   let rec parse_statement_sequence stmts =
     if is_at_end parser then return (List.rev stmts)
-    else parse_statement parser >>= fun next_stmt -> parse_statement_sequence (next_stmt :: stmts)
-  in parse_statement_sequence []
+    else
+      parse_statement parser >>= fun next_stmt ->
+      parse_statement_sequence (next_stmt :: stmts)
+  in
+  parse_statement_sequence []
 
 and parse_statement parser =
-  if match_any parser [Token.Print] then parse_print_stmt parser
+  if match_any parser [ Token.Print ] then parse_print_stmt parser
   else parse_expr_stmt parser
 
 and parse_print_stmt parser =
   parse_expression parser >>= fun expr ->
-  consume parser Token.Semicolon "expected semicolon at the end of a print statement" >>= fun () ->
-  return (Stmt.Print expr)
+  consume parser Token.Semicolon
+    "expected semicolon at the end of a print statement"
+  >>= fun () -> return (Stmt.Print expr)
 
 and parse_expr_stmt parser =
   parse_expression parser >>= fun expr ->
-  consume parser Token.Semicolon "expected semicolon at the end of an expression statement" >>= fun () ->
-  return (Stmt.Expression expr)
+  consume parser Token.Semicolon
+    "expected semicolon at the end of an expression statement"
+  >>= fun () -> return (Stmt.Expression expr)
 
-let parse parser = ok (parse_expression parser)
+let parse parser tokens =
+  parser.tokens <- Array.of_list tokens;
+  parse_program parser

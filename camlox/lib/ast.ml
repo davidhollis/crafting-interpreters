@@ -31,6 +31,13 @@ module Value = struct
         ba = bb
     | Nil, Nil -> true
     | _ -> false
+
+  let to_string = function
+    | Number n -> Printf.sprintf "%f" n
+    | String s -> s
+    | Boolean true -> "true"
+    | Boolean false -> "false"
+    | Nil -> "nil"
 end
 
 module Printer = struct

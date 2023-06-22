@@ -1,17 +1,18 @@
 open Base
+open Result
 
 type t = {
   error_reporter : Errors.t;
-  source : string;
+  mutable source : string;
   mutable current_line : int;
   mutable current_offset : int;
   mutable current_token_start : int;
 }
 
-let create error_reporter source =
+let create error_reporter =
   {
     error_reporter;
-    source;
+    source = "";
     current_line = 1;
     current_offset = 0;
     current_token_start = 0;
@@ -63,12 +64,13 @@ let is_alpha c =
 
 let is_alnum c = is_alpha c || is_digit c
 
+let lex_error scanner message =
+  Errors.report scanner.error_reporter scanner.current_line "" message;
+  fail `LexError
+
 let scan_string scanner =
   consume_until scanner '"';
-  if is_at_end scanner then (
-    Errors.report scanner.error_reporter scanner.current_line ""
-      "Hit EOF while scanning string";
-    None)
+  if is_at_end scanner then lex_error scanner "Hit EOF while scanning string"
   else (
     ignore (advance scanner);
     let string_value =
@@ -76,7 +78,7 @@ let scan_string scanner =
         ~pos:(scanner.current_token_start + 1)
         ~len:(scanner.current_offset - scanner.current_token_start - 2)
     in
-    Some (make_token scanner (Token.String string_value)))
+    return (make_token scanner (Token.String string_value)))
 
 let scan_number scanner =
   let open Char in
@@ -88,49 +90,54 @@ let scan_number scanner =
     while is_digit (peek scanner) do
       ignore (advance scanner)
     done);
-  Float.of_string_opt (current_lexeme scanner)
-  |> Option.map ~f:(fun value -> make_token scanner (Token.Number value))
+  match Float.of_string_opt (current_lexeme scanner) with
+  | Some f -> return (make_token scanner (Token.Number f))
+  | None ->
+      lex_error scanner
+        (Printf.sprintf "malformed float literal '%s'" (current_lexeme scanner))
 
 let scan_identifier scanner =
   while is_alnum (peek scanner) do
     ignore (advance scanner)
   done;
-  Some (make_token scanner (Token.type_of_word (current_lexeme scanner)))
+  return (make_token scanner (Token.type_of_word (current_lexeme scanner)))
 
 let rec scan_next scanner =
   scanner.current_token_start <- scanner.current_offset;
-  if is_at_end scanner then None
+  if is_at_end scanner then fail `EOF
   else
     match advance scanner with
-    | '(' -> Some (make_token scanner Token.LeftParen)
-    | ')' -> Some (make_token scanner Token.RightParen)
-    | '{' -> Some (make_token scanner Token.LeftBrace)
-    | '}' -> Some (make_token scanner Token.RightBrace)
-    | ',' -> Some (make_token scanner Token.Comma)
-    | '.' -> Some (make_token scanner Token.Dot)
-    | '-' -> Some (make_token scanner Token.Minus)
-    | '+' -> Some (make_token scanner Token.Plus)
-    | ';' -> Some (make_token scanner Token.Semicolon)
-    | '*' -> Some (make_token scanner Token.Asterisk)
+    | '(' -> return (make_token scanner Token.LeftParen)
+    | ')' -> return (make_token scanner Token.RightParen)
+    | '{' -> return (make_token scanner Token.LeftBrace)
+    | '}' -> return (make_token scanner Token.RightBrace)
+    | ',' -> return (make_token scanner Token.Comma)
+    | '.' -> return (make_token scanner Token.Dot)
+    | '-' -> return (make_token scanner Token.Minus)
+    | '+' -> return (make_token scanner Token.Plus)
+    | ';' -> return (make_token scanner Token.Semicolon)
+    | '*' -> return (make_token scanner Token.Asterisk)
     | '!' ->
-        if match_next scanner '=' then Some (make_token scanner Token.BangEqual)
-        else Some (make_token scanner Token.Bang)
+        if match_next scanner '=' then
+          return (make_token scanner Token.BangEqual)
+        else return (make_token scanner Token.Bang)
     | '=' ->
         if match_next scanner '=' then
-          Some (make_token scanner Token.EqualEqual)
-        else Some (make_token scanner Token.Equal)
+          return (make_token scanner Token.EqualEqual)
+        else return (make_token scanner Token.Equal)
     | '<' ->
-        if match_next scanner '=' then Some (make_token scanner Token.LessEqual)
-        else Some (make_token scanner Token.Less)
+        if match_next scanner '=' then
+          return (make_token scanner Token.LessEqual)
+        else return (make_token scanner Token.Less)
     | '>' ->
         if match_next scanner '=' then
-          Some (make_token scanner Token.GreaterEqual)
-        else Some (make_token scanner Token.Greater)
+          return (make_token scanner Token.GreaterEqual)
+        else return (make_token scanner Token.Greater)
     | '/' ->
         if match_next scanner '/' then (
           consume_until scanner '\n';
           scan_next scanner)
-        else Some (make_token scanner Token.Slash)
+        else return (make_token scanner Token.Slash)
     | ' ' | '\r' | '\t' ->
         (* Ignore most whitespace... *)
         scan_next scanner
@@ -138,24 +145,17 @@ let rec scan_next scanner =
         (* ... except newlines, which cause us to increment the line counter *)
         scanner.current_line <- scanner.current_line + 1;
         scan_next scanner
-    | '"' -> (
-        match scan_string scanner with
-        | Some _ as token -> token
-        | None -> scan_next scanner)
-    | c when is_digit c -> (
-        match scan_number scanner with
-        | Some _ as token -> token
-        | None -> scan_next scanner)
+    | '"' -> scan_string scanner
+    | c when is_digit c -> scan_number scanner
     | c when is_alpha c -> scan_identifier scanner
-    | c ->
-        Errors.report scanner.error_reporter scanner.current_line ""
-          (Printf.sprintf "Unexpected character %c" c);
-        scan_next scanner
+    | c -> lex_error scanner (Printf.sprintf "Unexpected character %c" c)
 
-let scan_all scanner : Token.t list =
+let scan_all scanner source =
+  scanner.source <- source;
   let rec consume tokens =
     match scan_next scanner with
-    | Some token -> consume (token :: tokens)
-    | None -> Token.eof (scanner.current_line + 1) :: tokens
+    | Ok token -> consume (token :: tokens)
+    | Error `EOF -> return (Token.eof (scanner.current_line + 1) :: tokens)
+    | Error `LexError -> fail `LexError
   in
-  List.rev (consume [])
+  consume [] >>| List.rev
