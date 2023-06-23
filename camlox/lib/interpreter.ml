@@ -23,14 +23,23 @@ let run state program_str =
   |> Scanner.scan_all state.scanner
   >>= Parser.parse state.parser
   >>= Tree_walker.run_program state.interpreter
+
+let eval state expr_string =
+  expr_string
+  |> Scanner.scan_all state.scanner
+  >>= Parser.parse_repl state.parser
+  >>= Tree_walker.run_repl state.interpreter
   |> function
-  | Ok () -> print_endline ""
-  | _ -> prerr_endline "Encountered one or more errors."
+  | Ok Ast.Value.Nil -> ()
+  | Ok value -> print_endline ("==> " ^ Ast.Value.to_string value)
+  | Error `LexError -> prerr_endline "[!] Malformed input"
+  | Error `ParseError -> prerr_endline "[!] Parse error"
+  | Error `RuntimeError -> prerr_endline "[!] Runtime error"
 
 let run_file path =
   let interpreter_state = empty_state () in
   let script_contents = In_channel.with_file path ~f:In_channel.input_all in
-  run interpreter_state script_contents;
+  ignore (run interpreter_state script_contents);
   interpreter_state.error_reporter
 
 let get_line prompt =
@@ -39,9 +48,9 @@ let get_line prompt =
   In_channel.input_line stdin
 
 let rec run_prompt ?(interpreter_state = empty_state ()) () =
-  match get_line "> " with
+  match get_line "camlox> " with
   | Some line ->
-      run interpreter_state line;
+      eval interpreter_state line;
       Errors.clear interpreter_state.error_reporter;
       run_prompt ~interpreter_state ()
   | None -> print_endline "\nBye!"

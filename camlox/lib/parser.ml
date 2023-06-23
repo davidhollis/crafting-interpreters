@@ -3,7 +3,7 @@ open Result
 open Ast
 
 type t = {
-  error_reporter : Errors.t;
+  mutable error_reporter : Errors.t;
   mutable tokens : Token.t array;
   mutable current_token : int;
   mutable should_fail : bool;
@@ -150,7 +150,7 @@ let rec parse_program parser =
       parse_declaration parser |> function
       | Ok next_stmt -> parse_statement_sequence (next_stmt :: stmts)
       | Error `ContinueParsing -> parse_statement_sequence stmts
-      | Error `ParseError as other_error -> other_error
+      | Error _ as other_error -> other_error
   in
   parse_statement_sequence []
 
@@ -158,11 +158,12 @@ and parse_declaration parser =
   (if match_any parser [ Token.Var ] then parse_var_decl parser
    else parse_statement parser)
   |> function
-  | Ok _ as stmt -> stmt
   | Error `ParseError ->
+      ignore (advance parser);
       synchronize parser;
       parser.should_fail <- true;
       fail `ContinueParsing
+  | stmt_result -> stmt_result
 
 and parse_var_decl parser =
   (match peek parser with
@@ -179,6 +180,7 @@ and parse_var_decl parser =
 
 and parse_statement parser =
   if match_any parser [ Token.Print ] then parse_print_stmt parser
+  else if match_any parser [ Token.LeftBrace ] then parse_block parser
   else parse_expr_stmt parser
 
 and parse_print_stmt parser =
@@ -186,6 +188,18 @@ and parse_print_stmt parser =
   consume parser Token.Semicolon
     "expected semicolon at the end of a print statement"
   >>= fun () -> return (Stmt.Print expr)
+
+and parse_block parser =
+  let rec parse_decl_sequence stmts =
+    if is_at_end parser then
+      parse_error parser "expected right brace at end of block"
+    else if match_any parser [ Token.RightBrace ] then
+      return (Stmt.Block (List.rev stmts))
+    else
+      parse_declaration parser >>= fun next_stmt ->
+      parse_decl_sequence (next_stmt :: stmts)
+  in
+  parse_decl_sequence []
 
 and parse_expr_stmt parser =
   parse_expression parser >>= fun expr ->
@@ -196,3 +210,23 @@ and parse_expr_stmt parser =
 let parse parser tokens =
   reset parser tokens;
   parse_program parser
+
+let parse_repl parser tokens =
+  reset parser tokens;
+  let original_error_reporter = parser.error_reporter in
+  parser.error_reporter <- Errors.create_from parser.error_reporter;
+  match parse_program parser with
+  | Ok stmts ->
+      parser.error_reporter <- original_error_reporter;
+      return (Either.First stmts)
+  | Error _ -> (
+      reset parser tokens;
+      parser.error_reporter <- Errors.create_from original_error_reporter;
+      match parse_expression parser with
+      | Ok expr ->
+          parser.error_reporter <- original_error_reporter;
+          return (Either.Second expr)
+      | Error _ ->
+          Errors.commit parser.error_reporter;
+          parser.error_reporter <- original_error_reporter;
+          fail `ParseError)

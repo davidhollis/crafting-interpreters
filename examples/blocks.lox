@@ -1,0 +1,36 @@
+var a = "global a";
+var b = "global b";
+var c = "global c";
+
+var n = 5;
+
+{
+    var a = "outer a";
+    var b = "outer b";
+
+    var n = 6;
+    
+    {
+        var a = "inner a";
+
+        n = n * 7;
+
+        print a;
+        print b;
+        print c;
+        print n;
+        print "";
+    }
+
+    print a;
+    print b;
+    print c;
+    print n;
+    print "";
+}
+
+print a;
+print b;
+print c;
+print n;
+print "";

@@ -2,11 +2,10 @@ open Base
 open Result
 open Ast
 
-type environment = (string, Value.t) Hashtbl.t
-type t = { error_reporter : Errors.t; globals : environment }
+type t = { error_reporter : Errors.t; mutable environment : Env.t }
 
 let create error_reporter =
-  { error_reporter; globals = Hashtbl.create (module String) }
+  { error_reporter; environment = Env.create error_reporter }
 
 let runtime_error tree_walker line message =
   Errors.report ~runtime:true tree_walker.error_reporter line
@@ -14,24 +13,12 @@ let runtime_error tree_walker line message =
   fail `RuntimeError
 
 let declare_var tree_walker name_token value =
-  Hashtbl.set tree_walker.globals ~key:(Token.print name_token) ~data:value
+  Env.declare tree_walker.environment name_token value
 
 let assign_var tree_walker name_token value =
-  let name_str = Token.print name_token in
-  if Option.is_some (Hashtbl.find tree_walker.globals name_str) then (
-    Hashtbl.set tree_walker.globals ~key:name_str ~data:value;
-    return value)
-  else
-    runtime_error tree_walker name_token.line
-      (Printf.sprintf "cannot assign to undeclared variable '%s'" name_str)
+  Env.assign tree_walker.environment name_token value
 
-let get_var tree_walker name_token =
-  match Hashtbl.find tree_walker.globals (Token.print name_token) with
-  | Some value -> return value
-  | None ->
-      runtime_error tree_walker name_token.line
-        (Printf.sprintf "found reference to undefined variable '%s'"
-           (Token.print name_token))
+let get_var tree_walker name_token = Env.get tree_walker.environment name_token
 
 let rec evaluate_expr tree_walker = function
   | Expr.Literal { tpe = Token.True; _ } -> return (Value.Boolean true)
@@ -105,7 +92,11 @@ let rec evaluate_expr tree_walker = function
       runtime_error tree_walker (-1)
         ("Unknown expression form: " ^ Printer.print_sexpr unknown_form)
 
-let interpret_stmt tree_walker = function
+let rec run_program tree_walker =
+  List.fold ~init:(return ()) ~f:(fun r stmt ->
+      r >>= fun () -> execute_stmt tree_walker stmt)
+
+and execute_stmt tree_walker = function
   | Stmt.Expression expr -> evaluate_expr tree_walker expr >>| ignore
   | Stmt.Print expr ->
       evaluate_expr tree_walker expr >>| fun value ->
@@ -113,7 +104,16 @@ let interpret_stmt tree_walker = function
   | Stmt.Var (name, None) -> return (declare_var tree_walker name Value.Nil)
   | Stmt.Var (name, Some init_expr) ->
       evaluate_expr tree_walker init_expr >>| declare_var tree_walker name
+  | Stmt.Block stmts ->
+      execute_block tree_walker stmts (Env.create_from tree_walker.environment)
 
-let run_program tree_walker =
-  List.fold ~init:(return ()) ~f:(fun r stmt ->
-      r >>= fun () -> interpret_stmt tree_walker stmt)
+and execute_block tree_walker stmts env =
+  let previous = tree_walker.environment in
+  tree_walker.environment <- env;
+  let result = run_program tree_walker stmts in
+  tree_walker.environment <- previous;
+  result
+
+let run_repl tree_walker = function
+  | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil
+  | Either.Second expr -> evaluate_expr tree_walker expr
