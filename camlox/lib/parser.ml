@@ -21,8 +21,8 @@ let peek parser = parser.tokens.(parser.current_token)
 let previous parser = parser.tokens.(parser.current_token - 1)
 let is_at_end parser = Token.has_type (peek parser) Token.EOF
 
-let parse_error parser message =
-  (match peek parser with
+let parse_error ?at_token parser message =
+  (match Option.value at_token ~default:(peek parser) with
   | { tpe = Token.EOF; line; _ } ->
       Errors.report parser.error_reporter line "at end" message
   | { line; _ } as tok ->
@@ -84,7 +84,21 @@ let parse_simple_binary token_types ~next parser =
   in
   next parser |> bind ~f:(fun left -> parse_branch left)
 
-let rec parse_expression parser = parse_equality parser
+let rec parse_expression parser = parse_assignment parser
+
+and parse_assignment parser =
+  parse_equality parser >>= fun lhs ->
+  if match_any parser [ Token.Equal ] then
+    let equals_token = previous parser in
+    parse_assignment parser >>= fun body ->
+    match lhs with
+    | Expr.Literal ({ tpe = Token.Identifier; _ } as name_token) ->
+        return (Expr.Assign (name_token, body))
+    | _ ->
+        parse_error ~at_token:equals_token parser
+          (Printf.sprintf "invalid lefthand side of assignment expression: %s"
+             (Printer.print_sexpr lhs))
+  else return lhs
 
 and parse_equality parser =
   parse_simple_binary

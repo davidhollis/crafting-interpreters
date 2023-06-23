@@ -13,8 +13,17 @@ let runtime_error tree_walker line message =
     "in `Tree_walker.evaluate'" message;
   fail `RuntimeError
 
-let put_var tree_walker name_token value =
+let declare_var tree_walker name_token value =
   Hashtbl.set tree_walker.globals ~key:(Token.print name_token) ~data:value
+
+let assign_var tree_walker name_token value =
+  let name_str = Token.print name_token in
+  if Option.is_some (Hashtbl.find tree_walker.globals name_str) then (
+    Hashtbl.set tree_walker.globals ~key:name_str ~data:value;
+    return value)
+  else
+    runtime_error tree_walker name_token.line
+      (Printf.sprintf "cannot assign to undeclared variable '%s'" name_str)
 
 let get_var tree_walker name_token =
   match Hashtbl.find tree_walker.globals (Token.print name_token) with
@@ -90,6 +99,8 @@ let rec evaluate_expr tree_walker = function
       | _ ->
           runtime_error tree_walker line
             ("Invalid binary operator " ^ Token.print op_token))
+  | Expr.Assign (name_tok, body) ->
+      evaluate_expr tree_walker body >>= assign_var tree_walker name_tok
   | unknown_form ->
       runtime_error tree_walker (-1)
         ("Unknown expression form: " ^ Printer.print_sexpr unknown_form)
@@ -99,9 +110,9 @@ let interpret_stmt tree_walker = function
   | Stmt.Print expr ->
       evaluate_expr tree_walker expr >>| fun value ->
       Stdio.print_endline (Value.to_string value)
-  | Stmt.Var (name, None) -> return (put_var tree_walker name Value.Nil)
+  | Stmt.Var (name, None) -> return (declare_var tree_walker name Value.Nil)
   | Stmt.Var (name, Some init_expr) ->
-      evaluate_expr tree_walker init_expr >>| put_var tree_walker name
+      evaluate_expr tree_walker init_expr >>| declare_var tree_walker name
 
 let run_program tree_walker =
   List.fold ~init:(return ()) ~f:(fun r stmt ->

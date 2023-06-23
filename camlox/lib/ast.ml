@@ -6,6 +6,7 @@ module Expr = struct
     | Grouping of t (* (<expr>) *)
     | Literal of Token.t (* <string>|<number>|<identifier> *)
     | Unary of Token.t * t (* <op> <expr> *)
+    | Assign of Token.t * t (* <identifier> = <expr> *)
 end
 
 module Stmt = struct
@@ -85,14 +86,16 @@ module Printer = struct
   let name = function
     | Expr.Binary (_, op, _) -> Token.print op
     | Expr.Grouping _ -> "group"
-    | Expr.Literal tok -> Token.describe tok
+    | Expr.Literal tok -> Token.print tok
     | Expr.Unary (op, _) -> "unary " ^ Token.print op
+    | Expr.Assign (name, _) -> "def " ^ Token.print name
 
   let children = function
     | Expr.Binary (left, _, right) -> [ left; right ]
     | Expr.Grouping expr -> [ expr ]
     | Expr.Literal _ -> []
     | Expr.Unary (_, expr) -> [ expr ]
+    | Expr.Assign (_, body) -> [ body ]
 
   let render_expr p expr = p (name expr) (children expr)
 
