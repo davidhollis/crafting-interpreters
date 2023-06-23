@@ -9,6 +9,11 @@ type t = {
 }
 
 let create error_reporter = { error_reporter; tokens = [||]; current_token = 0 }
+
+let reset parser tokens =
+  parser.tokens <- Array.of_list tokens;
+  parser.current_token <- 0
+
 let peek parser = parser.tokens.(parser.current_token)
 let previous parser = parser.tokens.(parser.current_token - 1)
 let is_at_end parser = Token.has_type (peek parser) Token.EOF
@@ -81,7 +86,14 @@ and parse_unary parser =
 and parse_primary parser =
   if
     match_any parser
-      [ Token.True; Token.False; Token.Nil; Token.String ""; Token.Number 0. ]
+      [
+        Token.True;
+        Token.False;
+        Token.Nil;
+        Token.String "";
+        Token.Number 0.;
+        Token.Identifier;
+      ]
   then return (Expr.Literal (previous parser))
   else if match_any parser [ Token.LeftParen ] then
     parse_expression parser
@@ -95,10 +107,27 @@ let rec parse_program parser =
   let rec parse_statement_sequence stmts =
     if is_at_end parser then return (List.rev stmts)
     else
-      parse_statement parser >>= fun next_stmt ->
+      parse_declaration parser >>= fun next_stmt ->
       parse_statement_sequence (next_stmt :: stmts)
   in
   parse_statement_sequence []
+
+and parse_declaration parser =
+  if match_any parser [ Token.Var ] then parse_var_decl parser
+  else parse_statement parser (* TODO this is a synchronization point *)
+
+and parse_var_decl parser =
+  (match peek parser with
+  | { tpe = Token.Identifier; _ } as var_name ->
+      ignore (advance parser);
+      if match_any parser [ Token.Equal ] then
+        parse_expression parser >>| fun expr -> Stmt.Var (var_name, Some expr)
+      else return (Stmt.Var (var_name, None))
+  | _ -> parse_error parser "expected identifier after 'var'")
+  >>= fun var_stmt ->
+  consume parser Token.Semicolon
+    "expected semicolon at the end of a var statement"
+  >>| fun () -> var_stmt
 
 and parse_statement parser =
   if match_any parser [ Token.Print ] then parse_print_stmt parser
@@ -117,5 +146,5 @@ and parse_expr_stmt parser =
   >>= fun () -> return (Stmt.Expression expr)
 
 let parse parser tokens =
-  parser.tokens <- Array.of_list tokens;
+  reset parser tokens;
   parse_program parser

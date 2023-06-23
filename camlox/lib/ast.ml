@@ -9,7 +9,10 @@ module Expr = struct
 end
 
 module Stmt = struct
-  type t = Expression of Expr.t | Print of Expr.t
+  type t =
+    | Expression of Expr.t
+    | Print of Expr.t
+    | Var of Token.t * Expr.t option
 end
 
 module Value = struct

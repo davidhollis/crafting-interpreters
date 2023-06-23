@@ -2,14 +2,27 @@ open Base
 open Result
 open Ast
 
-type t = { error_reporter : Errors.t }
+type environment = (string, Value.t) Hashtbl.t
+type t = { error_reporter : Errors.t; globals : environment }
 
-let create error_reporter = { error_reporter }
+let create error_reporter =
+  { error_reporter; globals = Hashtbl.create (module String) }
 
 let runtime_error tree_walker line message =
   Errors.report ~runtime:true tree_walker.error_reporter line
     "in `Tree_walker.evaluate'" message;
   fail `RuntimeError
+
+let put_var tree_walker name_token value =
+  Hashtbl.set tree_walker.globals ~key:(Token.print name_token) ~data:value
+
+let get_var tree_walker name_token =
+  match Hashtbl.find tree_walker.globals (Token.print name_token) with
+  | Some value -> return value
+  | None ->
+      runtime_error tree_walker name_token.line
+        (Printf.sprintf "found reference to undefined variable '%s'"
+           (Token.print name_token))
 
 let rec evaluate_expr tree_walker = function
   | Expr.Literal { tpe = Token.True; _ } -> return (Value.Boolean true)
@@ -17,6 +30,8 @@ let rec evaluate_expr tree_walker = function
   | Expr.Literal { tpe = Token.Nil; _ } -> return Value.Nil
   | Expr.Literal { tpe = Token.Number num; _ } -> return (Value.Number num)
   | Expr.Literal { tpe = Token.String str; _ } -> return (Value.String str)
+  | Expr.Literal ({ tpe = Token.Identifier; _ } as name_token) ->
+      get_var tree_walker name_token
   | Expr.Grouping subexpr -> evaluate_expr tree_walker subexpr
   | Expr.Unary (({ tpe = op; line; _ } as op_token), right_expr) -> (
       evaluate_expr tree_walker right_expr >>= fun right ->
@@ -84,6 +99,9 @@ let interpret_stmt tree_walker = function
   | Stmt.Print expr ->
       evaluate_expr tree_walker expr >>| fun value ->
       Stdio.print_endline (Value.to_string value)
+  | Stmt.Var (name, None) -> return (put_var tree_walker name Value.Nil)
+  | Stmt.Var (name, Some init_expr) ->
+      evaluate_expr tree_walker init_expr >>| put_var tree_walker name
 
 let run_program tree_walker =
   List.fold ~init:(return ()) ~f:(fun r stmt ->
