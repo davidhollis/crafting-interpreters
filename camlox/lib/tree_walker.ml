@@ -41,6 +41,14 @@ let rec evaluate_expr tree_walker = function
       | _ ->
           runtime_error tree_walker line
             ("Invalid unary operator " ^ Token.print op_token))
+  | Expr.Binary (left_expr, { tpe = Token.And; _ }, right_expr) ->
+      evaluate_expr tree_walker left_expr >>= fun left ->
+      if not (Value.is_truthy left) then return left
+      else evaluate_expr tree_walker right_expr
+  | Expr.Binary (left_expr, { tpe = Token.Or; _ }, right_expr) ->
+      evaluate_expr tree_walker left_expr >>= fun left ->
+      if Value.is_truthy left then return left
+      else evaluate_expr tree_walker right_expr
   | Expr.Binary (left_expr, ({ tpe = op; line; _ } as op_token), right_expr)
     -> (
       evaluate_expr tree_walker left_expr >>= fun left ->
@@ -106,6 +114,15 @@ and execute_stmt tree_walker = function
       evaluate_expr tree_walker init_expr >>| declare_var tree_walker name
   | Stmt.Block stmts ->
       execute_block tree_walker stmts (Env.create_from tree_walker.environment)
+  | Stmt.If (cond_expr, then_stmt, else_stmt) -> (
+      evaluate_expr tree_walker cond_expr >>= fun cond_value ->
+      if Value.is_truthy cond_value then execute_stmt tree_walker then_stmt
+      else
+        match else_stmt with
+        | Some actual_else_stmt -> execute_stmt tree_walker actual_else_stmt
+        | None -> return ())
+  | Stmt.While (cond_expr, body_stmt) ->
+      execute_while tree_walker cond_expr body_stmt
 
 and execute_block tree_walker stmts env =
   let previous = tree_walker.environment in
@@ -113,6 +130,18 @@ and execute_block tree_walker stmts env =
   let result = run_program tree_walker stmts in
   tree_walker.environment <- previous;
   result
+
+and execute_while tree_walker cond_expr body_stmt =
+  let last_result = ref (return true)
+  and should_keep_going = function Ok true -> true | _ -> false in
+  while should_keep_going !last_result do
+    last_result :=
+      evaluate_expr tree_walker cond_expr >>= fun cond_value ->
+      if Value.is_truthy cond_value then
+        execute_stmt tree_walker body_stmt >>| fun () -> true
+      else return false
+  done;
+  !last_result >>| fun _ -> ()
 
 let run_repl tree_walker = function
   | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil

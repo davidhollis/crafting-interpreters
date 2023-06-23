@@ -15,6 +15,8 @@ module Stmt = struct
     | Print of Expr.t
     | Var of Token.t * Expr.t option
     | Block of t list
+    | If of Expr.t * t * t option
+    | While of Expr.t * t
 end
 
 module Value = struct

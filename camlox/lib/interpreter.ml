@@ -35,6 +35,9 @@ let eval state expr_string =
   | Error `LexError -> prerr_endline "[!] Malformed input"
   | Error `ParseError -> prerr_endline "[!] Parse error"
   | Error `RuntimeError -> prerr_endline "[!] Runtime error"
+  | Error `NotImplemented ->
+      prerr_endline
+        "[?] Used a language feature that hasn't been implemented yet"
 
 let run_file path =
   let interpreter_state = empty_state () in

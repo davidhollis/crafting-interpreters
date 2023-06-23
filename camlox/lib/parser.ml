@@ -87,7 +87,7 @@ let parse_simple_binary token_types ~next parser =
 let rec parse_expression parser = parse_assignment parser
 
 and parse_assignment parser =
-  parse_equality parser >>= fun lhs ->
+  parse_logical_or parser >>= fun lhs ->
   if match_any parser [ Token.Equal ] then
     let equals_token = previous parser in
     parse_assignment parser >>= fun body ->
@@ -99,6 +99,12 @@ and parse_assignment parser =
           (Printf.sprintf "invalid lefthand side of assignment expression: %s"
              (Printer.print_sexpr lhs))
   else return lhs
+
+and parse_logical_or parser =
+  parse_simple_binary [ Token.Or ] ~next:parse_logical_and parser
+
+and parse_logical_and parser =
+  parse_simple_binary [ Token.And ] ~next:parse_equality parser
 
 and parse_equality parser =
   parse_simple_binary
@@ -179,15 +185,66 @@ and parse_var_decl parser =
   >>| fun () -> var_stmt
 
 and parse_statement parser =
-  if match_any parser [ Token.Print ] then parse_print_stmt parser
+  if match_any parser [ Token.For ] then parse_for_stmt parser
+  else if match_any parser [ Token.If ] then parse_if_stmt parser
+  else if match_any parser [ Token.Print ] then parse_print_stmt parser
+  else if match_any parser [ Token.While ] then parse_while_stmt parser
   else if match_any parser [ Token.LeftBrace ] then parse_block parser
   else parse_expr_stmt parser
+
+and parse_for_stmt parser =
+  consume parser Token.LeftParen "expected '(' after 'for'" >>= fun () ->
+  (if match_any parser [ Token.Semicolon ] then return None
+   else if match_any parser [ Token.Var ] then
+     parse_var_decl parser >>| Option.return
+   else parse_expr_stmt parser >>| Option.return)
+  >>= fun maybe_initializer_stmt ->
+  (if check parser Token.Semicolon then return None
+   else parse_expression parser >>| Option.return)
+  >>= fun maybe_condition_expr ->
+  consume parser Token.Semicolon "expected ';' after for condition"
+  >>= fun () ->
+  (if check parser Token.RightParen then return None
+   else parse_expression parser >>| Option.return)
+  >>= fun maybe_increment_expr ->
+  consume parser Token.RightParen "expected ')' after for clauses" >>= fun () ->
+  parse_statement parser >>= fun body ->
+  let loop_stmt =
+    Stmt.While
+      ( (match maybe_condition_expr with
+        | Some condition_expr -> condition_expr
+        | None -> Expr.Literal (Token.create Token.True "true" (-1))),
+        match maybe_increment_expr with
+        | Some increment_expr ->
+            Stmt.Block [ body; Stmt.Expression increment_expr ]
+        | None -> body )
+  in
+  match maybe_initializer_stmt with
+  | Some initializer_stmt -> return (Stmt.Block [ initializer_stmt; loop_stmt ])
+  | None -> return loop_stmt
+
+and parse_if_stmt parser =
+  consume parser Token.LeftParen "expected '(' after 'if'" >>= fun () ->
+  parse_expression parser >>= fun cond_expr ->
+  consume parser Token.RightParen "expected ')' after condition" >>= fun () ->
+  parse_statement parser >>= fun then_stmt ->
+  if match_any parser [ Token.Else ] then
+    parse_statement parser >>= fun else_stmt ->
+    return (Stmt.If (cond_expr, then_stmt, Some else_stmt))
+  else return (Stmt.If (cond_expr, then_stmt, None))
 
 and parse_print_stmt parser =
   parse_expression parser >>= fun expr ->
   consume parser Token.Semicolon
     "expected semicolon at the end of a print statement"
   >>= fun () -> return (Stmt.Print expr)
+
+and parse_while_stmt parser =
+  consume parser Token.LeftParen "expected '(' after 'while'" >>= fun () ->
+  parse_expression parser >>= fun cond_expr ->
+  consume parser Token.RightParen "expected ')' after condition" >>= fun () ->
+  parse_statement parser >>= fun body_stmt ->
+  return (Stmt.While (cond_expr, body_stmt))
 
 and parse_block parser =
   let rec parse_decl_sequence stmts =
