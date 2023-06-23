@@ -6,13 +6,16 @@ type t = {
   error_reporter : Errors.t;
   mutable tokens : Token.t array;
   mutable current_token : int;
+  mutable should_fail : bool;
 }
 
-let create error_reporter = { error_reporter; tokens = [||]; current_token = 0 }
+let create error_reporter =
+  { error_reporter; tokens = [||]; current_token = 0; should_fail = false }
 
 let reset parser tokens =
   parser.tokens <- Array.of_list tokens;
-  parser.current_token <- 0
+  parser.current_token <- 0;
+  parser.should_fail <- false
 
 let peek parser = parser.tokens.(parser.current_token)
 let previous parser = parser.tokens.(parser.current_token - 1)
@@ -39,6 +42,28 @@ let check parser token_type =
 let consume parser token_type message =
   if check parser token_type then return (ignore (advance parser))
   else parse_error parser message
+
+let rec synchronize parser =
+  let previous_token =
+    if parser.current_token > 0 then previous parser
+    else Token.create Token.Nil "nil" (-1)
+  and current_token = peek parser in
+  let is_synchronized =
+    is_at_end parser
+    || Token.has_type previous_token Token.Semicolon
+    || Token.has_type current_token Token.Class
+    || Token.has_type current_token Token.For
+    || Token.has_type current_token Token.Fun
+    || Token.has_type current_token Token.If
+    || Token.has_type current_token Token.Print
+    || Token.has_type current_token Token.Return
+    || Token.has_type current_token Token.Var
+    || Token.has_type current_token Token.While
+  in
+  if is_synchronized then ()
+  else (
+    ignore (advance parser);
+    synchronize parser)
 
 let rec match_any parser = function
   | next_token :: rest_of_tokens ->
@@ -105,16 +130,25 @@ and parse_primary parser =
 
 let rec parse_program parser =
   let rec parse_statement_sequence stmts =
-    if is_at_end parser then return (List.rev stmts)
+    if is_at_end parser then
+      if parser.should_fail then fail `ParseError else return (List.rev stmts)
     else
-      parse_declaration parser >>= fun next_stmt ->
-      parse_statement_sequence (next_stmt :: stmts)
+      parse_declaration parser |> function
+      | Ok next_stmt -> parse_statement_sequence (next_stmt :: stmts)
+      | Error `ContinueParsing -> parse_statement_sequence stmts
+      | Error `ParseError as other_error -> other_error
   in
   parse_statement_sequence []
 
 and parse_declaration parser =
-  if match_any parser [ Token.Var ] then parse_var_decl parser
-  else parse_statement parser (* TODO this is a synchronization point *)
+  (if match_any parser [ Token.Var ] then parse_var_decl parser
+   else parse_statement parser)
+  |> function
+  | Ok _ as stmt -> stmt
+  | Error `ParseError ->
+      synchronize parser;
+      parser.should_fail <- true;
+      fail `ContinueParsing
 
 and parse_var_decl parser =
   (match peek parser with
