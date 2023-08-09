@@ -96,11 +96,15 @@ let rec evaluate_expr tree_walker = function
             ("Invalid binary operator " ^ Token.print op_token))
   | Expr.Assign (name_tok, body) ->
       evaluate_expr tree_walker body >>= assign_var tree_walker name_tok
+  | Expr.Call (callee_expr, { line; _ }, arg_expr_list) ->
+      evaluate_expr tree_walker callee_expr >>= fun callee ->
+      arg_expr_list |> List.map ~f:(evaluate_expr tree_walker) |> Result.all
+      >>= fun arg_list -> call_value tree_walker line arg_list callee
   | unknown_form ->
       runtime_error tree_walker (-1)
         ("Unknown expression form: " ^ Printer.print_sexpr unknown_form)
 
-let rec run_program tree_walker =
+and run_program tree_walker =
   List.fold ~init:(return ()) ~f:(fun r stmt ->
       r >>= fun () -> execute_stmt tree_walker stmt)
 
@@ -142,6 +146,25 @@ and execute_while tree_walker cond_expr body_stmt =
       else return false
   done;
   !last_result >>| fun _ -> ()
+
+and call_value tree_walker line args = function
+  | Value.NativeFunction (arity, name) -> (
+      if not (phys_equal (List.length args) arity) then
+        runtime_error tree_walker line
+          (Printf.sprintf
+             "Wrong number of arguments for native function %s (expected: %d; \
+              got: %d)"
+             (Native.to_string name) arity (List.length args))
+      else
+        Native_impl.eval name args |> function
+        | Error `BadNativeCall ->
+            runtime_error tree_walker line
+              (Printf.sprintf "Bad call to native function %s"
+                 (Native.to_string name))
+        | Ok _ as result -> result)
+  | v ->
+      runtime_error tree_walker line
+        (Printf.sprintf "Value %s is not callable" (Value.show v))
 
 let run_repl tree_walker = function
   | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil

@@ -2,4 +2,4 @@
  (name camlox)
  (preprocess
   (pps ppx_deriving.show))
- (libraries base stdio))
+ (libraries base stdio unix))

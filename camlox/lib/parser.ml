@@ -77,12 +77,11 @@ let parse_simple_binary token_types ~next parser =
   let rec parse_branch expr_so_far =
     if match_any parser token_types then
       let op = previous parser in
-      next parser
-      |> bind ~f:(fun right ->
-             parse_branch (Expr.Binary (expr_so_far, op, right)))
+      next parser >>= fun right ->
+      parse_branch (Expr.Binary (expr_so_far, op, right))
     else return expr_so_far
   in
-  next parser |> bind ~f:(fun left -> parse_branch left)
+  next parser >>= parse_branch
 
 let rec parse_expression parser = parse_assignment parser
 
@@ -125,8 +124,36 @@ and parse_factor parser =
 and parse_unary parser =
   if match_any parser [ Token.Bang; Token.Minus ] then
     let op = previous parser in
-    parse_unary parser |> map ~f:(fun subexpr -> Expr.Unary (op, subexpr))
-  else parse_primary parser
+    parse_unary parser >>| fun subexpr -> Expr.Unary (op, subexpr)
+  else parse_call parser
+
+and parse_call parser =
+  let rec build_arg_lists callee =
+    if match_any parser [ Token.LeftParen ] then
+      let paren_token = previous parser in
+      parse_arguments parser >>= fun arg_list ->
+      build_arg_lists (Expr.Call (callee, paren_token, arg_list))
+    else return callee
+  in
+  parse_primary parser >>= build_arg_lists
+
+and parse_arguments parser =
+  (if check parser Token.RightParen then return []
+   else
+     let rec parse_next_arg arg_list =
+       if List.length arg_list >= 255 then
+         parse_error parser
+           "Cannot have more than 255 arguments in a single argument list"
+       else if match_any parser [ Token.Comma ] then
+         parse_expression parser >>= fun next_arg ->
+         parse_next_arg (next_arg :: arg_list)
+       else return arg_list
+     in
+     parse_expression parser >>| List.return >>= parse_next_arg >>| List.rev)
+  >>= fun arg_list ->
+  consume parser Token.RightParen
+    "expected closing paren ')' after argument list"
+  >>| fun () -> arg_list
 
 and parse_primary parser =
   if
@@ -141,11 +168,10 @@ and parse_primary parser =
       ]
   then return (Expr.Literal (previous parser))
   else if match_any parser [ Token.LeftParen ] then
-    parse_expression parser
-    |> bind ~f:(fun inner ->
-           consume parser Token.RightParen
-             "expected closing paren ')' after expression"
-           |> map ~f:(fun () -> Expr.Grouping inner))
+    parse_expression parser >>= fun inner ->
+    consume parser Token.RightParen
+      "expected closing paren ')' after expression"
+    >>| fun () -> Expr.Grouping inner
   else parse_error parser "expected some kind of expression"
 
 let rec parse_program parser =

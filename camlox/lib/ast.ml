@@ -3,6 +3,7 @@ open Base
 module Expr = struct
   type t =
     | Binary of t * Token.t * t (* <expr> <op> <expr> *)
+    | Call of t * Token.t * t list (* <expr> (<expr-list,>) *)
     | Grouping of t (* (<expr>) *)
     | Literal of Token.t (* <string>|<number>|<identifier> *)
     | Unary of Token.t * t (* <op> <expr> *)
@@ -20,7 +21,12 @@ module Stmt = struct
 end
 
 module Value = struct
-  type t = Number of float | String of string | Boolean of bool | Nil
+  type t =
+    | Number of float
+    | String of string
+    | Boolean of bool
+    | NativeFunction of int * Native.t
+    | Nil
   [@@deriving show]
 
   let is_truthy = function Boolean false | Nil -> false | _ -> true
@@ -44,6 +50,8 @@ module Value = struct
     | String s -> s
     | Boolean true -> "true"
     | Boolean false -> "false"
+    | NativeFunction (arity, fn_name) ->
+        Printf.sprintf "native(%s/%d)" (Native.to_string fn_name) arity
     | Nil -> "nil"
 end
 
@@ -88,6 +96,7 @@ module Printer = struct
 
   let name = function
     | Expr.Binary (_, op, _) -> Token.print op
+    | Expr.Call _ -> "call"
     | Expr.Grouping _ -> "group"
     | Expr.Literal tok -> Token.print tok
     | Expr.Unary (op, _) -> "unary " ^ Token.print op
@@ -95,6 +104,7 @@ module Printer = struct
 
   let children = function
     | Expr.Binary (left, _, right) -> [ left; right ]
+    | Expr.Call (callee, _, args) -> callee :: args
     | Expr.Grouping expr -> [ expr ]
     | Expr.Literal _ -> []
     | Expr.Unary (_, expr) -> [ expr ]

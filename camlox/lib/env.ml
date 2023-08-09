@@ -2,16 +2,24 @@ open Base
 open Result
 open Ast
 
+let global_bindings = (
+  let g = Hashtbl.create (module String)
+  in (
+    Hashtbl.set g ~key:"clock" ~data:(Value.NativeFunction (0, Native.Clock));
+    g
+  )
+)
+
 type t = {
   enclosing : t option;
   bindings : (string, Value.t) Hashtbl.t;
   error_reporter : Errors.t;
 }
 
-let create error_reporter =
+let create_global error_reporter =
   {
     enclosing = None;
-    bindings = Hashtbl.create (module String);
+    bindings = global_bindings;
     error_reporter;
   }
 
@@ -21,6 +29,8 @@ let create_from enclosing =
     bindings = Hashtbl.create (module String);
     error_reporter = enclosing.error_reporter;
   }
+
+let create error_reporter = create_from (create_global error_reporter)
 
 let runtime_error env line message =
   Errors.report ~runtime:true env.error_reporter line "in `Env'" message;
