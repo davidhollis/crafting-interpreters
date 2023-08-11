@@ -187,7 +187,8 @@ let rec parse_program parser =
   parse_statement_sequence []
 
 and parse_declaration parser =
-  (if match_any parser [ Token.Var ] then parse_var_decl parser
+  (if match_any parser [ Token.Fun ] then parse_function parser ~kind:"function"
+   else if match_any parser [ Token.Var ] then parse_var_decl parser
    else parse_statement parser)
   |> function
   | Error `ParseError ->
@@ -196,6 +197,45 @@ and parse_declaration parser =
       parser.should_fail <- true;
       fail `ContinueParsing
   | stmt_result -> stmt_result
+
+and parse_function parser ~kind =
+  consume parser Token.Identifier (Printf.sprintf "Expected %s name" kind)
+  >>= fun () ->
+  let name_token = previous parser in
+  consume parser Token.LeftParen
+    (Printf.sprintf "Expected '(' after %s name" kind)
+  >>= fun () ->
+  parse_parameter_list parser >>= fun params ->
+  consume parser Token.LeftBrace
+    (Printf.sprintf "Expected '{' before %s body" kind)
+  >>= fun () ->
+  parse_block parser >>= function
+  | Stmt.Block body -> return (Stmt.Function (name_token, params, body))
+  | _ ->
+      parse_error parser
+        "Unexpected statement type from parse_block. This should be \
+         unreachable."
+
+and parse_parameter_list parser =
+  (if check parser Token.RightParen then return []
+   else
+     let rec parse_next_param param_list =
+       if List.length param_list >= 255 then
+         parse_error parser
+           "Cannot have more than 255 parameters in a single parameter list"
+       else if match_any parser [ Token.Comma ] then
+         consume parser Token.Identifier
+           "Elements of parameter lists must be simple identifiers"
+         >>= fun () -> parse_next_param (previous parser :: param_list)
+       else return param_list
+     in
+     consume parser Token.Identifier
+       "Elements of parameter lists must be simple identifiers"
+     >>= fun () -> parse_next_param [ previous parser ] >>| List.rev)
+  >>= fun param_list ->
+  consume parser Token.RightParen
+    "Expected closing paren ')' after parameter list"
+  >>| fun () -> param_list
 
 and parse_var_decl parser =
   (match peek parser with
@@ -304,12 +344,13 @@ let parse_repl parser tokens =
       return (Either.First stmts)
   | Error _ -> (
       reset parser tokens;
+      let statement_error_reporter = parser.error_reporter in
       parser.error_reporter <- Errors.create_from original_error_reporter;
       match parse_expression parser with
       | Ok expr ->
           parser.error_reporter <- original_error_reporter;
           return (Either.Second expr)
       | Error _ ->
-          Errors.commit parser.error_reporter;
+          Errors.commit statement_error_reporter;
           parser.error_reporter <- original_error_reporter;
           fail `ParseError)

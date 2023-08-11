@@ -2,13 +2,10 @@ open Base
 open Result
 open Ast
 
-let global_bindings = (
-  let g = Hashtbl.create (module String)
-  in (
-    Hashtbl.set g ~key:"clock" ~data:(Value.NativeFunction (0, Native.Clock));
-    g
-  )
-)
+let global_bindings =
+  let g = Hashtbl.create (module String) in
+  Hashtbl.set g ~key:"clock" ~data:(Value.NativeFunction (0, Native.Clock));
+  g
 
 type t = {
   enclosing : t option;
@@ -17,11 +14,7 @@ type t = {
 }
 
 let create_global error_reporter =
-  {
-    enclosing = None;
-    bindings = global_bindings;
-    error_reporter;
-  }
+  { enclosing = None; bindings = global_bindings; error_reporter }
 
 let create_from enclosing =
   {
@@ -59,7 +52,7 @@ let rec assign env name_token value =
       | Some parent -> assign parent name_token value
       | None ->
           runtime_error env name_token.line
-            (Printf.sprintf "cannot assign to undeclared variable '%s" name_str)
+            (Printf.sprintf "cannot assign to undeclared variable '%s'" name_str)
       )
 
 let declare env name_token value =

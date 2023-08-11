@@ -8,6 +8,7 @@ module Expr = struct
     | Literal of Token.t (* <string>|<number>|<identifier> *)
     | Unary of Token.t * t (* <op> <expr> *)
     | Assign of Token.t * t (* <identifier> = <expr> *)
+    [@@deriving show]
 end
 
 module Stmt = struct
@@ -18,6 +19,8 @@ module Stmt = struct
     | Block of t list
     | If of Expr.t * t * t option
     | While of Expr.t * t
+    | Function of Token.t * Token.t list * t list
+    [@@deriving show]
 end
 
 module Value = struct
@@ -26,6 +29,7 @@ module Value = struct
     | String of string
     | Boolean of bool
     | NativeFunction of int * Native.t
+    | Function of string option * Token.t list * Stmt.t list
     | Nil
   [@@deriving show]
 
@@ -51,7 +55,9 @@ module Value = struct
     | Boolean true -> "true"
     | Boolean false -> "false"
     | NativeFunction (arity, fn_name) ->
-        Printf.sprintf "native(%s/%d)" (Native.to_string fn_name) arity
+        Printf.sprintf "<native function %s/%d>" (Native.to_string fn_name) arity
+    | Function (Some name, params, _) -> Printf.sprintf "<function %s/%d>" name (List.length params)
+    | Function (None, params, _) -> Printf.sprintf "<anonymous %d-ary function>" (List.length params)
     | Nil -> "nil"
 end
 

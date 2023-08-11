@@ -47,7 +47,7 @@ type token_type =
     EOF
 [@@deriving show]
 
-type t = { tpe : token_type; lexeme : string; line : int }
+type t = { tpe : token_type; lexeme : string; line : int } [@@deriving show]
 
 let create tpe lexeme line = { tpe; lexeme; line }
 let eof line = { tpe = EOF; lexeme = ""; line }
