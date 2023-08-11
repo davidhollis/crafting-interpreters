@@ -6,6 +6,7 @@ type t = {
   mutable parent : t option;
   mutable error_buffer : string list;
 }
+[@@deriving show]
 
 let create () =
   {

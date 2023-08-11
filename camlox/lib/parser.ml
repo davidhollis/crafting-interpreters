@@ -307,9 +307,7 @@ and parse_print_stmt parser =
   >>= fun () -> return (Stmt.Print expr)
 
 and parse_return_stmt parser =
-  if match_any parser [ Token.Semicolon ] then
-    return
-      (Stmt.Return None)
+  if match_any parser [ Token.Semicolon ] then return (Stmt.Return None)
   else
     parse_expression parser >>= fun expr ->
     consume parser Token.Semicolon

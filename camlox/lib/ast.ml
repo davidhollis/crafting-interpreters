@@ -24,47 +24,6 @@ module Stmt = struct
   [@@deriving show]
 end
 
-module Value = struct
-  type t =
-    | Number of float
-    | String of string
-    | Boolean of bool
-    | NativeFunction of int * Native.t
-    | Function of string option * Token.t list * Stmt.t list
-    | Nil
-  [@@deriving show]
-
-  let is_truthy = function Boolean false | Nil -> false | _ -> true
-
-  let equal a b =
-    match (a, b) with
-    | Number na, Number nb ->
-        let open Float in
-        na = nb
-    | String sa, String sb ->
-        let open String in
-        sa = sb
-    | Boolean ba, Boolean bb ->
-        let open Bool in
-        ba = bb
-    | Nil, Nil -> true
-    | _ -> false
-
-  let to_string = function
-    | Number n -> Printf.sprintf "%f" n
-    | String s -> s
-    | Boolean true -> "true"
-    | Boolean false -> "false"
-    | NativeFunction (arity, fn_name) ->
-        Printf.sprintf "<native function %s/%d>" (Native.to_string fn_name)
-          arity
-    | Function (Some name, params, _) ->
-        Printf.sprintf "<function %s/%d>" name (List.length params)
-    | Function (None, params, _) ->
-        Printf.sprintf "<anonymous %d-ary function>" (List.length params)
-    | Nil -> "nil"
-end
-
 module Printer = struct
   type t = {
     item_start : string;

@@ -30,8 +30,8 @@ let eval state expr_string =
   >>= Parser.parse_repl state.parser
   >>= Tree_walker.run_repl state.interpreter
   |> function
-  | Ok Ast.Value.Nil -> ()
-  | Ok value -> print_endline ("==> " ^ Ast.Value.to_string value)
+  | Ok Runtime.Value.Nil -> ()
+  | Ok value -> print_endline ("==> " ^ Runtime.Value.to_string value)
   | Error `LexError -> prerr_endline "[!] Malformed input"
   | Error `ParseError -> prerr_endline "[!] Parse error"
   | Error `RuntimeError -> prerr_endline "[!] Runtime error"

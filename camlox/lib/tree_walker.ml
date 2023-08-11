@@ -1,11 +1,12 @@
 open Base
 open Result
 open Ast
+open Runtime
 
-type t = { error_reporter : Errors.t; mutable environment : Env.t }
+type t = { error_reporter : Errors.t; mutable environment : Environment.t }
 
 let create error_reporter =
-  { error_reporter; environment = Env.create error_reporter }
+  { error_reporter; environment = Environment.create error_reporter }
 
 let runtime_error tree_walker line message =
   Errors.report ~runtime:true tree_walker.error_reporter line
@@ -13,12 +14,13 @@ let runtime_error tree_walker line message =
   fail `RuntimeError
 
 let declare_var tree_walker name_token value =
-  Env.declare tree_walker.environment name_token value
+  Environment.declare tree_walker.environment name_token value
 
 let assign_var tree_walker name_token value =
-  Env.assign tree_walker.environment name_token value
+  Environment.assign tree_walker.environment name_token value
 
-let get_var tree_walker name_token = Env.get tree_walker.environment name_token
+let get_var tree_walker name_token =
+  Environment.get tree_walker.environment name_token
 
 let rec evaluate_expr tree_walker = function
   | Expr.Literal { tpe = Token.True; _ } -> return (Value.Boolean true)
@@ -117,7 +119,8 @@ and execute_stmt tree_walker = function
   | Stmt.Var (name, Some init_expr) ->
       evaluate_expr tree_walker init_expr >>| declare_var tree_walker name
   | Stmt.Block stmts ->
-      execute_block tree_walker stmts (Env.create_from tree_walker.environment)
+      execute_block tree_walker stmts
+        (Environment.create_from tree_walker.environment)
   | Stmt.If (cond_expr, then_stmt, else_stmt) -> (
       evaluate_expr tree_walker cond_expr >>= fun cond_value ->
       if Value.is_truthy cond_value then execute_stmt tree_walker then_stmt
@@ -130,10 +133,12 @@ and execute_stmt tree_walker = function
   | Stmt.Function (name, params, body) ->
       return
         (declare_var tree_walker name
-           (Value.Function (Some (Token.print name), params, body)))
+           (Value.Function
+              (Some (Token.print name), params, body, tree_walker.environment)))
   | Stmt.Return expr ->
-        Option.(expr >>| evaluate_expr tree_walker) |> Option.value ~default:(return Value.Nil)
-        >>= fun retval -> fail (`Return retval)
+      Option.(expr >>| evaluate_expr tree_walker)
+      |> Option.value ~default:(return Value.Nil)
+      >>= fun retval -> fail (`Return retval)
 
 and execute_block tree_walker stmts env =
   let previous = tree_walker.environment in
@@ -169,7 +174,7 @@ and call_value tree_walker line args = function
               (Printf.sprintf "Bad call to native function %s"
                  (Native.to_string name))
         | Ok _ as result -> result)
-  | Value.Function (name, params, body) ->
+  | Value.Function (name, params, body, closure) -> (
       if not (phys_equal (List.length args) (List.length params)) then
         runtime_error tree_walker line
           (Printf.sprintf
@@ -177,29 +182,31 @@ and call_value tree_walker line args = function
              (Option.value name ~default:"<anonymous function>")
              (List.length params) (List.length args))
       else
-        let function_env = Env.create_from tree_walker.environment in
+        let function_env = Environment.create_from closure in
         ignore
           List.(
             zip_exn params args >>| fun (argname, argval) ->
-            Env.declare function_env argname argval);
-        (match execute_block tree_walker body function_env with
+            Environment.declare function_env argname argval);
+        match execute_block tree_walker body function_env with
         | Ok () -> return Value.Nil
         | Error (`Return v) -> return v
-        | Error `RuntimeError -> fail `RuntimeError
-        )
+        | Error `RuntimeError -> fail `RuntimeError)
   | v ->
       runtime_error tree_walker line
         (Printf.sprintf "Value %s is not callable" (Value.to_string v))
 
 let handle_bad_return tree_walker = function
-    | Ok v -> return v
-    | Error (`Return _) -> runtime_error tree_walker (-1) "Attempted to return from outside of a function or method scope"
-    | Error `RuntimeError -> fail `RuntimeError
+  | Ok v -> return v
+  | Error (`Return _) ->
+      runtime_error tree_walker (-1)
+        "Attempted to return from outside of a function or method scope"
+  | Error `RuntimeError -> fail `RuntimeError
 
 let run_repl tree_walker code =
   (match code with
-    | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil
-    | Either.Second expr -> evaluate_expr tree_walker expr)
+  | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil
+  | Either.Second expr -> evaluate_expr tree_walker expr)
   |> handle_bad_return tree_walker
 
-  let run_program_toplevel tree_walker code = run_program tree_walker code |> handle_bad_return tree_walker
+let run_program_toplevel tree_walker code =
+  run_program tree_walker code |> handle_bad_return tree_walker
