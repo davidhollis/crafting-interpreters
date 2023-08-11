@@ -254,6 +254,7 @@ and parse_statement parser =
   if match_any parser [ Token.For ] then parse_for_stmt parser
   else if match_any parser [ Token.If ] then parse_if_stmt parser
   else if match_any parser [ Token.Print ] then parse_print_stmt parser
+  else if match_any parser [ Token.Return ] then parse_return_stmt parser
   else if match_any parser [ Token.While ] then parse_while_stmt parser
   else if match_any parser [ Token.LeftBrace ] then parse_block parser
   else parse_expr_stmt parser
@@ -304,6 +305,16 @@ and parse_print_stmt parser =
   consume parser Token.Semicolon
     "expected semicolon at the end of a print statement"
   >>= fun () -> return (Stmt.Print expr)
+
+and parse_return_stmt parser =
+  if match_any parser [ Token.Semicolon ] then
+    return
+      (Stmt.Return None)
+  else
+    parse_expression parser >>= fun expr ->
+    consume parser Token.Semicolon
+      "expected semicolon at the end of a print statement"
+    >>= fun () -> return (Stmt.Return (Some expr))
 
 and parse_while_stmt parser =
   consume parser Token.LeftParen "expected '(' after 'while'" >>= fun () ->

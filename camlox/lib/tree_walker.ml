@@ -128,7 +128,12 @@ and execute_stmt tree_walker = function
   | Stmt.While (cond_expr, body_stmt) ->
       execute_while tree_walker cond_expr body_stmt
   | Stmt.Function (name, params, body) ->
-      return (declare_var tree_walker name (Value.Function (Some (Token.print name), params, body)))
+      return
+        (declare_var tree_walker name
+           (Value.Function (Some (Token.print name), params, body)))
+  | Stmt.Return expr ->
+        Option.(expr >>| evaluate_expr tree_walker) |> Option.value ~default:(return Value.Nil)
+        >>= fun retval -> fail (`Return retval)
 
 and execute_block tree_walker stmts env =
   let previous = tree_walker.environment in
@@ -164,19 +169,37 @@ and call_value tree_walker line args = function
               (Printf.sprintf "Bad call to native function %s"
                  (Native.to_string name))
         | Ok _ as result -> result)
-  | Value.Function (name, params, body) -> (
-    if not (phys_equal (List.length args) (List.length params)) then
-        runtime_error tree_walker line (Printf.sprintf "Wrong number of arguments for %s (expected: %d; got: %d)" (Option.value name ~default:"<anonymous function>") (List.length params) (List.length args))
-    else
-        let function_env = Env.create_from tree_walker.environment in (
-            ignore List.(zip_exn params args >>| fun (argname, argval) -> Env.declare function_env argname argval);
-            execute_block tree_walker body function_env >>= fun () -> return Value.Nil
+  | Value.Function (name, params, body) ->
+      if not (phys_equal (List.length args) (List.length params)) then
+        runtime_error tree_walker line
+          (Printf.sprintf
+             "Wrong number of arguments for %s (expected: %d; got: %d)"
+             (Option.value name ~default:"<anonymous function>")
+             (List.length params) (List.length args))
+      else
+        let function_env = Env.create_from tree_walker.environment in
+        ignore
+          List.(
+            zip_exn params args >>| fun (argname, argval) ->
+            Env.declare function_env argname argval);
+        (match execute_block tree_walker body function_env with
+        | Ok () -> return Value.Nil
+        | Error (`Return v) -> return v
+        | Error `RuntimeError -> fail `RuntimeError
         )
-  )
   | v ->
       runtime_error tree_walker line
         (Printf.sprintf "Value %s is not callable" (Value.to_string v))
 
-let run_repl tree_walker = function
-  | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil
-  | Either.Second expr -> evaluate_expr tree_walker expr
+let handle_bad_return tree_walker = function
+    | Ok v -> return v
+    | Error (`Return _) -> runtime_error tree_walker (-1) "Attempted to return from outside of a function or method scope"
+    | Error `RuntimeError -> fail `RuntimeError
+
+let run_repl tree_walker code =
+  (match code with
+    | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil
+    | Either.Second expr -> evaluate_expr tree_walker expr)
+  |> handle_bad_return tree_walker
+
+  let run_program_toplevel tree_walker code = run_program tree_walker code |> handle_bad_return tree_walker

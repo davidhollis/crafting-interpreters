@@ -22,7 +22,7 @@ let run state program_str =
   program_str
   |> Scanner.scan_all state.scanner
   >>= Parser.parse state.parser
-  >>= Tree_walker.run_program state.interpreter
+  >>= Tree_walker.run_program_toplevel state.interpreter
 
 let eval state expr_string =
   expr_string
