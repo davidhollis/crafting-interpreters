@@ -13,14 +13,17 @@ end
 
 module Stmt = struct
   type t =
-    | Expression of Expr.t
-    | Print of Expr.t
-    | Var of Token.t * Expr.t option
-    | Block of t list
-    | If of Expr.t * t * t option
-    | While of Expr.t * t
-    | Function of Token.t * Token.t list * t list
-    | Return of Expr.t option
+    | Expression of Expr.t (* <expr> *)
+    | Print of Expr.t (* print <expr> *)
+    | Var of Token.t * Expr.t option (* var <identifier> [= <expr>] *)
+    | Block of t list (* { <stmt-list;> } *)
+    | If of Expr.t * t * t option (* if (<expr>) <stmt> [else <stmt>] *)
+    | While of Expr.t * t (* while (<expr>) <stmt> *)
+    | Function of
+        Token.t
+        * Token.t list
+        * t list (* fun <identifier> (<identifier-list,>) { <stmt-list;> } *)
+    | Return of Expr.t option (* return [<expr>] *)
   [@@deriving show]
 end
 
