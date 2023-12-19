@@ -3,10 +3,21 @@ open Result
 open Ast
 open Runtime
 
-type t = { error_reporter : Errors.t; mutable environment : Environment.t }
+type t = {
+  error_reporter : Errors.t;
+  toplevel : Environment.t;
+  mutable environment : Environment.t;
+  mutable resolved : Resolver.resolved_symbols;
+}
 
 let create error_reporter =
-  { error_reporter; environment = Environment.create error_reporter }
+  let toplevel = Environment.create error_reporter in
+  {
+    error_reporter;
+    toplevel;
+    environment = toplevel;
+    resolved = Resolver.empty_table ();
+  }
 
 let runtime_error tree_walker line message =
   Errors.report ~runtime:true tree_walker.error_reporter line
@@ -17,10 +28,15 @@ let declare_var tree_walker name_token value =
   Environment.declare tree_walker.environment name_token value
 
 let assign_var tree_walker name_token value =
-  Environment.assign tree_walker.environment name_token value
+  match Resolver.lookup tree_walker.resolved name_token with
+  | Some depth -> Environment.assign_resolved tree_walker.environment name_token value ~depth
+  | None -> Environment.assign tree_walker.toplevel name_token value
 
 let get_var tree_walker name_token =
-  Environment.get tree_walker.environment name_token
+  match Resolver.lookup tree_walker.resolved name_token with
+  | Some depth ->
+      Environment.get_resolved tree_walker.environment name_token ~depth
+  | None -> Environment.get tree_walker.toplevel name_token
 
 let rec evaluate_expr tree_walker = function
   | Expr.Literal { tpe = Token.True; _ } -> return (Value.Boolean true)
@@ -202,11 +218,13 @@ let handle_bad_return tree_walker = function
         "Attempted to return from outside of a function or method scope"
   | Error `RuntimeError -> fail `RuntimeError
 
-let run_repl tree_walker code =
+let run_repl tree_walker (code, resolved) =
+  tree_walker.resolved <- resolved;
   (match code with
   | Either.First stmts -> run_program tree_walker stmts >>| fun _ -> Value.Nil
   | Either.Second expr -> evaluate_expr tree_walker expr)
   |> handle_bad_return tree_walker
 
-let run_program_toplevel tree_walker code =
+let run_program_toplevel tree_walker (code, resolved) =
+  tree_walker.resolved <- resolved;
   run_program tree_walker code |> handle_bad_return tree_walker

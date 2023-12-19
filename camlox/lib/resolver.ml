@@ -2,17 +2,22 @@ open Base
 open Result
 open Ast
 
+type resolved_symbols = (Token.t, int) Hashtbl.t
+
+let lookup (table : resolved_symbols) symbol = Hashtbl.find table symbol
+let empty_table () = Hashtbl.create (module Token)
+
 type t = {
   error_reporter : Errors.t;
-  scopes : (string, bool) Base.Hashtbl.t Base.Stack.t;
-  resolutions : (Token.t, int) Base.Hashtbl.t;
+  scopes : (string, bool) Hashtbl.t Stack.t;
+  resolutions : resolved_symbols;
 }
 
 let create error_reporter =
   {
     error_reporter;
-    scopes = Base.Stack.create ();
-    resolutions = Base.Hashtbl.create (module Token);
+    scopes = Stack.create ();
+    resolutions = Hashtbl.create (module Token);
   }
 
 let resolution_error ?at_token resolver message =
@@ -71,8 +76,8 @@ and visit_expr resolver = function
   | Expr.Literal ({ tpe = Token.Identifier; lexeme; _ } as name) ->
       let is_valid_access =
         Option.(
-          Base.Stack.top resolver.scopes
-          >>= (fun scope -> Base.Hashtbl.find scope lexeme)
+          Stack.top resolver.scopes
+          >>= (fun scope -> Hashtbl.find scope lexeme)
           |> value ~default:true)
       in
       if is_valid_access then return (resolve_local resolver name)
@@ -85,34 +90,42 @@ and visit_expr resolver = function
       visit_expr resolver rexpr >>| fun () -> resolve_local resolver name
 
 and begin_scope resolver =
-  return (Base.Stack.push resolver.scopes (Base.Hashtbl.create (module String)))
+  return (Stack.push resolver.scopes (Hashtbl.create (module String)))
 
 and end_scope resolver =
-  match Base.Stack.pop resolver.scopes with
+  match Stack.pop resolver.scopes with
   | Some _ -> return ()
   | None ->
       resolution_error resolver
         "Attempted to end a scope while no scopes were open"
 
 and declare resolver name =
-  match Base.Stack.top resolver.scopes with
-  | Some scope -> Base.Hashtbl.set scope ~key:name.lexeme ~data:false
+  match Stack.top resolver.scopes with
+  | Some scope -> Hashtbl.set scope ~key:name.lexeme ~data:false
   | None -> ()
 
 and define resolver name =
-  match Base.Stack.top resolver.scopes with
-  | Some scope -> Base.Hashtbl.set scope ~key:name.lexeme ~data:true
+  match Stack.top resolver.scopes with
+  | Some scope -> Hashtbl.set scope ~key:name.lexeme ~data:true
   | None -> ()
 
 and resolve_local resolver name =
   let nearest_scope =
-    Base.List.findi (Base.Stack.to_list resolver.scopes) ~f:(fun _ scope ->
-        Base.Option.is_some (Base.Hashtbl.find scope Token.(name.lexeme)))
+    Base.List.findi (Stack.to_list resolver.scopes) ~f:(fun _ scope ->
+        Base.Option.is_some (Hashtbl.find scope Token.(name.lexeme)))
   in
   match nearest_scope with
-  | Some (depth, _) ->
-      Base.Hashtbl.set resolver.resolutions ~key:name ~data:depth
+  | Some (depth, _) -> Hashtbl.set resolver.resolutions ~key:name ~data:depth
   | None -> ()
 
-and resolve resolver stmts =
-  visit_statement_sequence resolver stmts >>| fun () -> resolver.resolutions
+and resolve_program resolver stmts =
+  visit_statement_sequence resolver stmts >>| fun () ->
+  (stmts, resolver.resolutions)
+
+and resolve_repl resolver = function
+  | Either.First stmts ->
+      visit_statement_sequence resolver stmts >>| fun () ->
+      (Either.first stmts, resolver.resolutions)
+  | Either.Second expr ->
+      visit_expr resolver expr >>| fun () ->
+      (Either.second expr, resolver.resolutions)
