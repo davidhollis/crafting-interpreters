@@ -7,7 +7,7 @@ type resolved_symbols = (Token.t, int) Hashtbl.t
 let lookup (table : resolved_symbols) symbol = Hashtbl.find table symbol
 let empty_table () = Hashtbl.create (module Token)
 
-type function_type = NoFunction | Function
+type function_type = NoFunction | Function | Method
 
 type t = {
   error_reporter : Errors.t;
@@ -59,18 +59,10 @@ and visit_statement resolver = function
       | None -> return ())
   | Stmt.While (cond, body) ->
       visit_expr resolver cond >>= fun () -> visit_statement resolver body
-  | Stmt.Function (name, args, body) ->
-      let enclosing = resolver.current_function_type in
-      resolver.current_function_type <- Function;
+  | Stmt.Function ((name, _, _) as fn) ->
       declare resolver name >>= fun () ->
       define resolver name >>= fun () ->
-      begin_scope resolver >>= fun () ->
-      List.fold args ~init:(return ()) ~f:(fun r argname ->
-          r >>= fun () -> define resolver argname)
-      >>= fun () ->
-      visit_statement_sequence resolver body >>= fun () ->
-      end_scope resolver >>| fun () ->
-      resolver.current_function_type <- enclosing
+      resolve_function resolver fn ~function_type:Function
   | Stmt.Return (return_token, expr) -> (
       match resolver.current_function_type with
       | NoFunction ->
@@ -80,8 +72,12 @@ and visit_statement resolver = function
           match expr with
           | Some expr -> visit_expr resolver expr
           | None -> return ()))
-  | Stmt.Class (name, _) ->
-      declare resolver name >>= fun () -> define resolver name
+  | Stmt.Class (name, methods) ->
+      declare resolver name >>= fun () ->
+      define resolver name >>= fun () ->
+      List.fold methods ~init:(return ()) ~f:(fun r method_defn ->
+          r >>= fun () ->
+          resolve_function resolver method_defn ~function_type:Method)
 
 and visit_expr resolver = function
   | Expr.Binary (left, _, right) ->
@@ -109,6 +105,16 @@ and visit_expr resolver = function
       visit_expr resolver rexpr >>| fun () -> resolve_local resolver name
   | Expr.Set (lvalue, _, rvalue) ->
       visit_expr resolver rvalue >>= fun () -> visit_expr resolver lvalue
+
+and resolve_function resolver (_, args, body) ~function_type =
+  let enclosing = resolver.current_function_type in
+  resolver.current_function_type <- function_type;
+  begin_scope resolver >>= fun () ->
+  List.fold args ~init:(return ()) ~f:(fun r argname ->
+      r >>= fun () -> define resolver argname)
+  >>= fun () ->
+  visit_statement_sequence resolver body >>= fun () ->
+  end_scope resolver >>| fun () -> resolver.current_function_type <- enclosing
 
 and begin_scope resolver =
   return (Stack.push resolver.scopes (Hashtbl.create (module String)))

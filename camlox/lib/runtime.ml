@@ -9,16 +9,17 @@ module rec Value : sig
     closure : Environment.t;
   }
 
-  type cls = { name : string; methods : fn list }
+  and cls = { class_name : string; methods : (string, fn) Hashtbl.t }
+  and instance = { klass : cls; fields : (string, t) Hashtbl.t }
 
-  type t =
+  and t =
     | Number of float
     | String of string
     | Boolean of bool
     | NativeFunction of int * Native.t
     | Function of fn
     | Class of cls
-    | Instance of cls * (string, t) Hashtbl.t
+    | Instance of instance
     | Nil
 
   val is_truthy : t -> bool
@@ -26,7 +27,10 @@ module rec Value : sig
   val to_string : t -> string
   val pp : Stdlib.Format.formatter -> t -> unit
   val show : t -> string
+
+  (* OOP *)
   val instantiate : cls -> t
+  val lookup_method : cls -> string -> t option
 end = struct
   type fn = {
     name : string option;
@@ -36,16 +40,20 @@ end = struct
   }
   [@@deriving show]
 
-  type cls = { name : string; methods : fn list } [@@deriving show]
+  and cls = { class_name : string; methods : ((string, fn) Hashtbl.t[@opaque]) }
+  [@@deriving show]
 
-  type t =
+  and instance = { klass : cls; fields : ((string, t) Hashtbl.t[@opaque]) }
+  [@@deriving show]
+
+  and t =
     | Number of float
     | String of string
     | Boolean of bool
     | NativeFunction of int * Native.t
     | Function of fn
     | Class of cls
-    | Instance of cls * ((string, t) Hashtbl.t[@opaque])
+    | Instance of instance
     | Nil
   [@@deriving show]
 
@@ -77,11 +85,17 @@ end = struct
         Printf.sprintf "<function %s/%d>" name (List.length params)
     | Function { name = None; params; _ } ->
         Printf.sprintf "<anonymous %d-ary function>" (List.length params)
-    | Class { name; _ } -> Printf.sprintf "<class %s>" name
-    | Instance ({ name; _ }, _) -> Printf.sprintf "<%s instance>" name
+    | Class { class_name; _ } -> Printf.sprintf "<class %s>" class_name
+    | Instance { klass = { class_name; _ }; _ } ->
+        Printf.sprintf "<%s instance>" class_name
     | Nil -> "nil"
 
-  let instantiate klass = Value.Instance (klass, Hashtbl.create (module String))
+  let instantiate klass =
+    Value.Instance { klass; fields = Hashtbl.create (module String) }
+
+  let lookup_method klass method_name =
+    Option.(
+      Hashtbl.find klass.methods method_name >>| fun fn -> Value.Function fn)
 end
 
 and Environment : sig

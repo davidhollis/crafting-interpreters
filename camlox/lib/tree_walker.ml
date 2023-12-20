@@ -123,21 +123,24 @@ let rec evaluate_expr tree_walker = function
   | Expr.Get (referent, property) -> (
       let prop_name = Token.print property in
       evaluate_expr tree_walker referent >>= function
-      | Value.Instance (_klass, properties) -> (
-          match Hashtbl.find properties prop_name with
+      | Value.Instance { klass; fields } -> (
+          match Hashtbl.find fields prop_name with
           | Some value -> return value
-          | None ->
-              runtime_error tree_walker property.line
-                (Printf.sprintf "undefined proprty '%s'" prop_name))
+          | None -> (
+              match Value.lookup_method klass prop_name with
+              | Some methd -> return methd
+              | None ->
+                  runtime_error tree_walker property.line
+                    (Printf.sprintf "undefined proprty '%s'" prop_name)))
       | _ ->
           runtime_error tree_walker property.line
             "Only instances have properties")
   | Expr.Set (lvalue, property, rvalue) -> (
       let prop_name = Token.print property in
       evaluate_expr tree_walker lvalue >>= function
-      | Value.Instance (_, properties) ->
+      | Value.Instance { fields; _ } ->
           evaluate_expr tree_walker rvalue >>= fun value ->
-          Hashtbl.set properties ~key:prop_name ~data:value;
+          Hashtbl.set fields ~key:prop_name ~data:value;
           return value
       | _ ->
           runtime_error tree_walker property.line
@@ -184,10 +187,22 @@ and execute_stmt tree_walker = function
       Option.(expr >>| evaluate_expr tree_walker)
       |> Option.value ~default:(return Value.Nil)
       >>= fun retval -> fail (`Return retval)
-  | Stmt.Class (name, _) ->
+  | Stmt.Class (name, method_defns) ->
+      let methods = Hashtbl.create (module String) in
+      List.iter method_defns ~f:(fun (name, params, body) ->
+          let method_name = Token.print name in
+          Hashtbl.set methods ~key:method_name
+            ~data:
+              Value.
+                {
+                  name = Some method_name;
+                  params;
+                  body;
+                  closure = tree_walker.environment;
+                });
       return
         (declare_var tree_walker name
-           (Value.Class { name = Token.print name; methods = [] }))
+           (Value.Class { class_name = Token.print name; methods }))
 
 and execute_block tree_walker stmts env =
   let previous = tree_walker.environment in
