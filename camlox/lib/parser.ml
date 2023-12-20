@@ -170,6 +170,7 @@ and parse_primary parser =
         Token.String "";
         Token.Number 0.;
         Token.Identifier;
+        Token.This;
       ]
   then return (Expr.Literal (previous parser))
   else if match_any parser [ Token.LeftParen ] then

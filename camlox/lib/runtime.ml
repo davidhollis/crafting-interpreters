@@ -2,8 +2,11 @@ open Base
 open Result
 
 module rec Value : sig
+  type fn_type = Function | Method | Initializer
+
   type fn = {
     name : string option;
+    fn_type : fn_type;
     params : Token.t list;
     body : Ast.Stmt.t list;
     closure : Environment.t;
@@ -30,10 +33,13 @@ module rec Value : sig
 
   (* OOP *)
   val instantiate : cls -> t
-  val lookup_method : cls -> string -> t option
+  val lookup_method : cls -> string -> bind:t -> t option
 end = struct
+  type fn_type = Function | Method | Initializer [@@deriving show]
+
   type fn = {
     name : string option;
+    fn_type : fn_type;
     params : Token.t list;
     body : Ast.Stmt.t list;
     closure : Environment.t;
@@ -81,8 +87,13 @@ end = struct
     | NativeFunction (arity, fn_name) ->
         Printf.sprintf "<native function %s/%d>" (Native.to_string fn_name)
           arity
-    | Function { name = Some name; params; _ } ->
-        Printf.sprintf "<function %s/%d>" name (List.length params)
+    | Function { name = Some name; params; fn_type; _ } ->
+        Printf.sprintf "<%s %s/%d>"
+          (match fn_type with
+          | Function -> "function"
+          | Method -> "bound method"
+          | Initializer -> "bound initializer")
+          name (List.length params)
     | Function { name = None; params; _ } ->
         Printf.sprintf "<anonymous %d-ary function>" (List.length params)
     | Class { class_name; _ } -> Printf.sprintf "<class %s>" class_name
@@ -93,9 +104,15 @@ end = struct
   let instantiate klass =
     Value.Instance { klass; fields = Hashtbl.create (module String) }
 
-  let lookup_method klass method_name =
-    Option.(
-      Hashtbl.find klass.methods method_name >>| fun fn -> Value.Function fn)
+  let lookup_method klass method_name ~bind =
+    match Hashtbl.find klass.methods method_name with
+    | Some { name; params; body; closure; fn_type } ->
+        let binding = Environment.create_from closure in
+        Environment.declare binding
+          Token.{ tpe = This; lexeme = "this"; line = -1 }
+          bind;
+        Some (Value.Function { name; fn_type; params; body; closure = binding })
+    | None -> None
 end
 
 and Environment : sig

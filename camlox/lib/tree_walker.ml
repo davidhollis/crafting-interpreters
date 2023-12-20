@@ -48,6 +48,8 @@ let rec evaluate_expr tree_walker = function
   | Expr.Literal { tpe = Token.String str; _ } -> return (Value.String str)
   | Expr.Literal ({ tpe = Token.Identifier; _ } as name_token) ->
       get_var tree_walker name_token
+  | Expr.Literal ({ tpe = Token.This; _ } as this_token) ->
+      get_var tree_walker this_token
   | Expr.Grouping subexpr -> evaluate_expr tree_walker subexpr
   | Expr.Unary (({ tpe = op; line; _ } as op_token), right_expr) -> (
       evaluate_expr tree_walker right_expr >>= fun right ->
@@ -123,11 +125,11 @@ let rec evaluate_expr tree_walker = function
   | Expr.Get (referent, property) -> (
       let prop_name = Token.print property in
       evaluate_expr tree_walker referent >>= function
-      | Value.Instance { klass; fields } -> (
+      | Value.Instance { klass; fields } as inst -> (
           match Hashtbl.find fields prop_name with
           | Some value -> return value
           | None -> (
-              match Value.lookup_method klass prop_name with
+              match Value.lookup_method klass prop_name ~bind:inst with
               | Some methd -> return methd
               | None ->
                   runtime_error tree_walker property.line
@@ -179,6 +181,7 @@ and execute_stmt tree_walker = function
            (Value.Function
               {
                 name = Some (Token.print name);
+                fn_type = Function;
                 params;
                 body;
                 closure = tree_walker.environment;
@@ -196,6 +199,9 @@ and execute_stmt tree_walker = function
               Value.
                 {
                   name = Some method_name;
+                  fn_type =
+                    (if String.(method_name = "init") then Initializer
+                     else Method);
                   params;
                   body;
                   closure = tree_walker.environment;
@@ -238,7 +244,7 @@ and call_value tree_walker line args = function
               (Printf.sprintf "Bad call to native function %s"
                  (Native.to_string name))
         | Ok _ as result -> result)
-  | Value.Function { name; params; body; closure } -> (
+  | Value.Function { name; params; body; closure; fn_type } -> (
       if not (phys_equal (List.length args) (List.length params)) then
         runtime_error tree_walker line
           (Printf.sprintf
@@ -251,11 +257,30 @@ and call_value tree_walker line args = function
           List.(
             zip_exn params args >>| fun (argname, argval) ->
             Environment.declare function_env argname argval);
-        match execute_block tree_walker body function_env with
+        (match execute_block tree_walker body function_env with
         | Ok () -> return Value.Nil
         | Error (`Return v) -> return v
         | Error `RuntimeError -> fail `RuntimeError)
-  | Value.Class klass -> return (Value.instantiate klass)
+        >>= fun return_value ->
+        match fn_type with
+        | Initializer ->
+            (* Initializers always return `this` *)
+            Environment.get_resolved closure
+              Token.{ tpe = Token.This; lexeme = "this"; line = -1 }
+              ~depth:0
+        | _ -> return return_value)
+  | Value.Class klass -> (
+      let new_instance = Value.instantiate klass in
+      match Value.lookup_method klass "init" ~bind:new_instance with
+      | Some init ->
+          call_value tree_walker line args init >>| fun _ -> new_instance
+      | None ->
+          if not (phys_equal 0 (List.length args)) then
+            runtime_error tree_walker line
+              (Printf.sprintf
+                 "Wrong number of arguments for init (expected: 0; got: %d)"
+                 (List.length args))
+          else return new_instance)
   | v ->
       runtime_error tree_walker line
         (Printf.sprintf "Value %s is not callable" (Value.to_string v))

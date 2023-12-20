@@ -7,13 +7,15 @@ type resolved_symbols = (Token.t, int) Hashtbl.t
 let lookup (table : resolved_symbols) symbol = Hashtbl.find table symbol
 let empty_table () = Hashtbl.create (module Token)
 
-type function_type = NoFunction | Function | Method
+type function_type = NoFunction | Function | Method | Initializer
+type class_type = NoClass | Class
 
 type t = {
   error_reporter : Errors.t;
   scopes : (string, bool) Hashtbl.t Stack.t;
   resolutions : resolved_symbols;
   mutable current_function_type : function_type;
+  mutable current_class_type : class_type;
 }
 
 let create error_reporter =
@@ -22,6 +24,7 @@ let create error_reporter =
     scopes = Stack.create ();
     resolutions = Hashtbl.create (module Token);
     current_function_type = NoFunction;
+    current_class_type = NoClass;
   }
 
 let resolution_error ?at_token resolver message =
@@ -68,16 +71,32 @@ and visit_statement resolver = function
       | NoFunction ->
           resolution_error resolver "Illegal 'return' from top-level code."
             ~at_token:return_token
+      | Initializer ->
+          if Option.is_some expr then
+            resolution_error resolver
+              "cannot return a value from an initializer" ~at_token:return_token
+          else return ()
       | _ -> (
           match expr with
           | Some expr -> visit_expr resolver expr
           | None -> return ()))
   | Stmt.Class (name, methods) ->
+      let enclosing = resolver.current_class_type in
+      resolver.current_class_type <- Class;
       declare resolver name >>= fun () ->
       define resolver name >>= fun () ->
-      List.fold methods ~init:(return ()) ~f:(fun r method_defn ->
+      begin_scope resolver >>= fun () ->
+      Option.iter (Stack.top resolver.scopes) ~f:(fun new_scope ->
+          Hashtbl.set new_scope ~key:"this" ~data:true);
+      List.fold methods ~init:(return ())
+        ~f:(fun r ((method_name, _, _) as method_defn) ->
           r >>= fun () ->
-          resolve_function resolver method_defn ~function_type:Method)
+          resolve_function resolver method_defn
+            ~function_type:
+              (if String.(method_name.lexeme = "init") then Initializer
+               else Method))
+      >>= fun () ->
+      end_scope resolver >>| fun () -> resolver.current_class_type <- enclosing
 
 and visit_expr resolver = function
   | Expr.Binary (left, _, right) ->
@@ -99,6 +118,12 @@ and visit_expr resolver = function
       else
         resolution_error ~at_token:name resolver
           "Can't reference a variable inside its own initializer."
+  | Expr.Literal ({ tpe = Token.This; _ } as name) -> (
+      match resolver.current_class_type with
+      | NoClass ->
+          resolution_error ~at_token:name resolver
+            "illegal use of 'this' outside of a class."
+      | Class -> return (resolve_local resolver name))
   | Expr.Literal _ -> return ()
   | Expr.Unary (_, right) -> visit_expr resolver right
   | Expr.Assign (name, rexpr) ->
