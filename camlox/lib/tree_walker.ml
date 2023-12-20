@@ -120,6 +120,28 @@ let rec evaluate_expr tree_walker = function
       evaluate_expr tree_walker callee_expr >>= fun callee ->
       arg_expr_list |> List.map ~f:(evaluate_expr tree_walker) |> Result.all
       >>= fun arg_list -> call_value tree_walker line arg_list callee
+  | Expr.Get (referent, property) -> (
+      let prop_name = Token.print property in
+      evaluate_expr tree_walker referent >>= function
+      | Value.Instance (_klass, properties) -> (
+          match Hashtbl.find properties prop_name with
+          | Some value -> return value
+          | None ->
+              runtime_error tree_walker property.line
+                (Printf.sprintf "undefined proprty '%s'" prop_name))
+      | _ ->
+          runtime_error tree_walker property.line
+            "Only instances have properties")
+  | Expr.Set (lvalue, property, rvalue) -> (
+      let prop_name = Token.print property in
+      evaluate_expr tree_walker lvalue >>= function
+      | Value.Instance (_, properties) ->
+          evaluate_expr tree_walker rvalue >>= fun value ->
+          Hashtbl.set properties ~key:prop_name ~data:value;
+          return value
+      | _ ->
+          runtime_error tree_walker property.line
+            "Only instances have properties")
   | unknown_form ->
       runtime_error tree_walker (-1)
         ("Unknown expression form: " ^ Printer.print_sexpr unknown_form)
@@ -152,11 +174,20 @@ and execute_stmt tree_walker = function
       return
         (declare_var tree_walker name
            (Value.Function
-              (Some (Token.print name), params, body, tree_walker.environment)))
+              {
+                name = Some (Token.print name);
+                params;
+                body;
+                closure = tree_walker.environment;
+              }))
   | Stmt.Return (_, expr) ->
       Option.(expr >>| evaluate_expr tree_walker)
       |> Option.value ~default:(return Value.Nil)
       >>= fun retval -> fail (`Return retval)
+  | Stmt.Class (name, _) ->
+      return
+        (declare_var tree_walker name
+           (Value.Class { name = Token.print name; methods = [] }))
 
 and execute_block tree_walker stmts env =
   let previous = tree_walker.environment in
@@ -192,7 +223,7 @@ and call_value tree_walker line args = function
               (Printf.sprintf "Bad call to native function %s"
                  (Native.to_string name))
         | Ok _ as result -> result)
-  | Value.Function (name, params, body, closure) -> (
+  | Value.Function { name; params; body; closure } -> (
       if not (phys_equal (List.length args) (List.length params)) then
         runtime_error tree_walker line
           (Printf.sprintf
@@ -209,6 +240,7 @@ and call_value tree_walker line args = function
         | Ok () -> return Value.Nil
         | Error (`Return v) -> return v
         | Error `RuntimeError -> fail `RuntimeError)
+  | Value.Class klass -> return (Value.instantiate klass)
   | v ->
       runtime_error tree_walker line
         (Printf.sprintf "Value %s is not callable" (Value.to_string v))

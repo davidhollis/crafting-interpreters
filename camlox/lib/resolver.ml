@@ -80,6 +80,8 @@ and visit_statement resolver = function
           match expr with
           | Some expr -> visit_expr resolver expr
           | None -> return ()))
+  | Stmt.Class (name, _) ->
+      declare resolver name >>= fun () -> define resolver name
 
 and visit_expr resolver = function
   | Expr.Binary (left, _, right) ->
@@ -88,6 +90,7 @@ and visit_expr resolver = function
       visit_expr resolver callee >>= fun () ->
       List.fold args ~init:(return ()) ~f:(fun r arg ->
           r >>= fun () -> visit_expr resolver arg)
+  | Expr.Get (referent, _) -> visit_expr resolver referent
   | Expr.Grouping subexpr -> visit_expr resolver subexpr
   | Expr.Literal ({ tpe = Token.Identifier; lexeme; _ } as name) ->
       let is_valid_access =
@@ -104,6 +107,8 @@ and visit_expr resolver = function
   | Expr.Unary (_, right) -> visit_expr resolver right
   | Expr.Assign (name, rexpr) ->
       visit_expr resolver rexpr >>| fun () -> resolve_local resolver name
+  | Expr.Set (lvalue, _, rvalue) ->
+      visit_expr resolver rvalue >>= fun () -> visit_expr resolver lvalue
 
 and begin_scope resolver =
   return (Stack.push resolver.scopes (Hashtbl.create (module String)))

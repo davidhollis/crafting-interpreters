@@ -4,26 +4,31 @@ module Expr = struct
   type t =
     | Binary of t * Token.t * t (* <expr> <op> <expr> *)
     | Call of t * Token.t * t list (* <expr> (<expr-list,>) *)
+    | Get of t * Token.t (* <expr> . <identifier> *)
     | Grouping of t (* (<expr>) *)
     | Literal of Token.t (* <string>|<number>|<identifier> *)
     | Unary of Token.t * t (* <op> <expr> *)
     | Assign of Token.t * t (* <identifier> = <expr> *)
+    | Set of t * Token.t * t (* <expr> . <identifier> = <expr> *)
   [@@deriving show]
 end
 
 module Stmt = struct
-  type t =
+  type function_definition = Token.t * Token.t list * t list
+
+  and t =
     | Expression of Expr.t (* <expr> *)
     | Print of Expr.t (* print <expr> *)
     | Var of Token.t * Expr.t option (* var <identifier> [= <expr>] *)
     | Block of t list (* { <stmt-list;> } *)
     | If of Expr.t * t * t option (* if (<expr>) <stmt> [else <stmt>] *)
     | While of Expr.t * t (* while (<expr>) <stmt> *)
-    | Function of
-        Token.t
-        * Token.t list
-        * t list (* fun <identifier> (<identifier-list,>) { <stmt-list;> } *)
+    | Function of function_definition
+      (* fun <identifier> (<identifier-list,>) { <stmt-list;> } *)
     | Return of Token.t * Expr.t option (* return [<expr>] *)
+    | Class of
+        Token.t
+        * function_definition list (* class <identifier> { <method-list> } *)
   [@@deriving show]
 end
 
@@ -69,18 +74,22 @@ module Printer = struct
   let name = function
     | Expr.Binary (_, op, _) -> Token.print op
     | Expr.Call _ -> "call"
+    | Expr.Get (_, name) -> "get " ^ Token.print name
     | Expr.Grouping _ -> "group"
     | Expr.Literal tok -> Token.print tok
     | Expr.Unary (op, _) -> "unary " ^ Token.print op
     | Expr.Assign (name, _) -> "def " ^ Token.print name
+    | Expr.Set (_, name, _) -> "set " ^ Token.print name
 
   let children = function
     | Expr.Binary (left, _, right) -> [ left; right ]
     | Expr.Call (callee, _, args) -> callee :: args
+    | Expr.Get (referent, _) -> [ referent ]
     | Expr.Grouping expr -> [ expr ]
     | Expr.Literal _ -> []
     | Expr.Unary (_, expr) -> [ expr ]
     | Expr.Assign (_, body) -> [ body ]
+    | Expr.Set (lvalue, _, rvalue) -> [ lvalue; rvalue ]
 
   let render_expr p expr = p (name expr) (children expr)
 

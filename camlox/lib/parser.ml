@@ -93,6 +93,8 @@ and parse_assignment parser =
     match lhs with
     | Expr.Literal ({ tpe = Token.Identifier; _ } as name_token) ->
         return (Expr.Assign (name_token, body))
+    | Expr.Get (referent, property) ->
+        return (Expr.Set (referent, property, body))
     | _ ->
         parse_error ~at_token:equals_token parser
           (Printf.sprintf "invalid lefthand side of assignment expression: %s"
@@ -133,6 +135,9 @@ and parse_call parser =
       let paren_token = previous parser in
       parse_arguments parser >>= fun arg_list ->
       build_arg_lists (Expr.Call (callee, paren_token, arg_list))
+    else if match_any parser [ Token.Dot ] then
+      consume parser Token.Identifier "expected property name after '.'."
+      >>= fun () -> build_arg_lists (Expr.Get (callee, previous parser))
     else return callee
   in
   parse_primary parser >>= build_arg_lists
@@ -189,6 +194,7 @@ let rec parse_program parser =
 and parse_declaration parser =
   (if match_any parser [ Token.Fun ] then parse_function parser ~kind:"function"
    else if match_any parser [ Token.Var ] then parse_var_decl parser
+   else if match_any parser [ Token.Class ] then parse_class parser
    else parse_statement parser)
   |> function
   | Error `ParseError ->
@@ -249,6 +255,25 @@ and parse_var_decl parser =
   consume parser Token.Semicolon
     "expected semicolon at the end of a var statement"
   >>| fun () -> var_stmt
+
+and parse_class parser =
+  consume parser Token.Identifier "Expected class name" >>= fun () ->
+  let name_token = previous parser in
+  consume parser Token.LeftBrace "Expected '{' before class body." >>= fun () ->
+  let rec parse_method_list methods =
+    if is_at_end parser || check parser Token.RightBrace then return methods
+    else
+      parse_function parser ~kind:"method" >>= function
+      | Stmt.Function (name, args, body) ->
+          parse_method_list ((name, args, body) :: methods)
+      | _ ->
+          parse_error parser
+            "Unexected output from parse_function: not a function"
+  in
+  parse_method_list [] >>= fun methods ->
+  return (Stmt.Class (name_token, List.rev methods)) >>= fun klass ->
+  consume parser Token.RightBrace "Expected '}' after class body" >>| fun () ->
+  klass
 
 and parse_statement parser =
   if match_any parser [ Token.For ] then parse_for_stmt parser

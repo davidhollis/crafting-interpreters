@@ -2,12 +2,23 @@ open Base
 open Result
 
 module rec Value : sig
+  type fn = {
+    name : string option;
+    params : Token.t list;
+    body : Ast.Stmt.t list;
+    closure : Environment.t;
+  }
+
+  type cls = { name : string; methods : fn list }
+
   type t =
     | Number of float
     | String of string
     | Boolean of bool
     | NativeFunction of int * Native.t
-    | Function of string option * Token.t list * Ast.Stmt.t list * Environment.t
+    | Function of fn
+    | Class of cls
+    | Instance of cls * (string, t) Hashtbl.t
     | Nil
 
   val is_truthy : t -> bool
@@ -15,13 +26,26 @@ module rec Value : sig
   val to_string : t -> string
   val pp : Stdlib.Format.formatter -> t -> unit
   val show : t -> string
+  val instantiate : cls -> t
 end = struct
+  type fn = {
+    name : string option;
+    params : Token.t list;
+    body : Ast.Stmt.t list;
+    closure : Environment.t;
+  }
+  [@@deriving show]
+
+  type cls = { name : string; methods : fn list } [@@deriving show]
+
   type t =
     | Number of float
     | String of string
     | Boolean of bool
     | NativeFunction of int * Native.t
-    | Function of string option * Token.t list * Ast.Stmt.t list * Environment.t
+    | Function of fn
+    | Class of cls
+    | Instance of cls * ((string, t) Hashtbl.t[@opaque])
     | Nil
   [@@deriving show]
 
@@ -49,11 +73,15 @@ end = struct
     | NativeFunction (arity, fn_name) ->
         Printf.sprintf "<native function %s/%d>" (Native.to_string fn_name)
           arity
-    | Function (Some name, params, _, _) ->
+    | Function { name = Some name; params; _ } ->
         Printf.sprintf "<function %s/%d>" name (List.length params)
-    | Function (None, params, _, _) ->
+    | Function { name = None; params; _ } ->
         Printf.sprintf "<anonymous %d-ary function>" (List.length params)
+    | Class { name; _ } -> Printf.sprintf "<class %s>" name
+    | Instance ({ name; _ }, _) -> Printf.sprintf "<%s instance>" name
     | Nil -> "nil"
+
+  let instantiate klass = Value.Instance (klass, Hashtbl.create (module String))
 end
 
 and Environment : sig
