@@ -29,7 +29,7 @@ let run state program_str =
 
 let eval state expr_string =
   expr_string
-  |> Scanner.scan_all state.scanner
+  |> Scanner.scan_all state.scanner ~repl:true
   >>= Parser.parse_repl state.parser
   >>= Resolver.resolve_repl state.resolver
   >>= Tree_walker.run_repl state.interpreter
@@ -57,7 +57,10 @@ let get_line prompt =
   In_channel.input_line stdin
 
 let rec run_prompt ?(interpreter_state = empty_state ()) () =
-  match get_line "camlox> " with
+  let prompt_str =
+    Printf.sprintf "camlox:%d> " interpreter_state.scanner.current_line
+  in
+  match get_line prompt_str with
   | Some line ->
       eval interpreter_state line;
       Errors.clear interpreter_state.error_reporter;

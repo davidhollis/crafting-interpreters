@@ -1,0 +1,12 @@
+var a = "global";
+{
+    fun print_a() {
+        print a;
+    }
+
+    print_a();
+
+    var a = "block";
+
+    print_a();
+}

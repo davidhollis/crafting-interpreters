@@ -18,11 +18,11 @@ let create error_reporter =
     current_token_start = 0;
   }
 
-let reset scanner source =
+let reset ?(repl = false) scanner source =
   scanner.source <- source;
-  scanner.current_line <- 1;
   scanner.current_offset <- 0;
-  scanner.current_token_start <- 0
+  scanner.current_token_start <- 0;
+  if not repl then scanner.current_line <- 1
 
 let current_lexeme scanner =
   String.sub scanner.source ~pos:scanner.current_token_start
@@ -156,12 +156,14 @@ let rec scan_next scanner =
     | c when is_alpha c -> scan_identifier scanner
     | c -> lex_error scanner (Printf.sprintf "Unexpected character %c" c)
 
-let scan_all scanner source =
-  reset scanner source;
+let scan_all ?(repl = false) scanner source =
+  reset scanner source ~repl;
   let rec consume tokens =
     match scan_next scanner with
     | Ok token -> consume (token :: tokens)
     | Error `EOF -> return (Token.eof (scanner.current_line + 1) :: tokens)
     | Error `LexError -> fail `LexError
   in
-  consume [] >>| List.rev
+  let token_stream = consume [] >>| List.rev in
+  if repl then scanner.current_line <- scanner.current_line + 1;
+  token_stream

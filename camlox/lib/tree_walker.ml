@@ -29,7 +29,9 @@ let declare_var tree_walker name_token value =
 
 let assign_var tree_walker name_token value =
   match Resolver.lookup tree_walker.resolved name_token with
-  | Some depth -> Environment.assign_resolved tree_walker.environment name_token value ~depth
+  | Some depth ->
+      Environment.assign_resolved tree_walker.environment name_token value
+        ~depth
   | None -> Environment.assign tree_walker.toplevel name_token value
 
 let get_var tree_walker name_token =
@@ -151,7 +153,7 @@ and execute_stmt tree_walker = function
         (declare_var tree_walker name
            (Value.Function
               (Some (Token.print name), params, body, tree_walker.environment)))
-  | Stmt.Return expr ->
+  | Stmt.Return (_, expr) ->
       Option.(expr >>| evaluate_expr tree_walker)
       |> Option.value ~default:(return Value.Nil)
       >>= fun retval -> fail (`Return retval)

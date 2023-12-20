@@ -7,10 +7,13 @@ type resolved_symbols = (Token.t, int) Hashtbl.t
 let lookup (table : resolved_symbols) symbol = Hashtbl.find table symbol
 let empty_table () = Hashtbl.create (module Token)
 
+type function_type = NoFunction | Function
+
 type t = {
   error_reporter : Errors.t;
   scopes : (string, bool) Hashtbl.t Stack.t;
   resolutions : resolved_symbols;
+  mutable current_function_type : function_type;
 }
 
 let create error_reporter =
@@ -18,6 +21,7 @@ let create error_reporter =
     error_reporter;
     scopes = Stack.create ();
     resolutions = Hashtbl.create (module Token);
+    current_function_type = NoFunction;
   }
 
 let resolution_error ?at_token resolver message =
@@ -39,13 +43,11 @@ and visit_statement resolver = function
   | Stmt.Expression expr -> visit_expr resolver expr
   | Stmt.Print expr -> visit_expr resolver expr
   | Stmt.Var (name, initilizer) ->
-      declare resolver name;
+      declare resolver name >>= fun () ->
       (match initilizer with
       | Some expr -> visit_expr resolver expr
       | None -> return ())
-      >>= fun () ->
-      define resolver name;
-      return ()
+      >>= fun () -> define resolver name
   | Stmt.Block stmts ->
       begin_scope resolver >>= fun () ->
       visit_statement_sequence resolver stmts >>= fun () -> end_scope resolver
@@ -58,12 +60,26 @@ and visit_statement resolver = function
   | Stmt.While (cond, body) ->
       visit_expr resolver cond >>= fun () -> visit_statement resolver body
   | Stmt.Function (name, args, body) ->
-      define resolver name;
+      let enclosing = resolver.current_function_type in
+      resolver.current_function_type <- Function;
+      declare resolver name >>= fun () ->
+      define resolver name >>= fun () ->
       begin_scope resolver >>= fun () ->
-      List.iter args ~f:(fun argname -> define resolver argname);
-      visit_statement_sequence resolver body >>= fun () -> end_scope resolver
-  | Stmt.Return (Some expr) -> visit_expr resolver expr
-  | Stmt.Return None -> return ()
+      List.fold args ~init:(return ()) ~f:(fun r argname ->
+          r >>= fun () -> define resolver argname)
+      >>= fun () ->
+      visit_statement_sequence resolver body >>= fun () ->
+      end_scope resolver >>| fun () ->
+      resolver.current_function_type <- enclosing
+  | Stmt.Return (return_token, expr) -> (
+      match resolver.current_function_type with
+      | NoFunction ->
+          resolution_error resolver "Illegal 'return' from top-level code."
+            ~at_token:return_token
+      | _ -> (
+          match expr with
+          | Some expr -> visit_expr resolver expr
+          | None -> return ()))
 
 and visit_expr resolver = function
   | Expr.Binary (left, _, right) ->
@@ -101,13 +117,18 @@ and end_scope resolver =
 
 and declare resolver name =
   match Stack.top resolver.scopes with
-  | Some scope -> Hashtbl.set scope ~key:name.lexeme ~data:false
-  | None -> ()
+  | Some scope -> (
+      match Hashtbl.find scope name.lexeme with
+      | Some _ ->
+          resolution_error ~at_token:name resolver
+            (Printf.sprintf "attempted to redeclare variable '%s'" name.lexeme)
+      | None -> return (Hashtbl.set scope ~key:name.lexeme ~data:false))
+  | None -> return ()
 
 and define resolver name =
   match Stack.top resolver.scopes with
-  | Some scope -> Hashtbl.set scope ~key:name.lexeme ~data:true
-  | None -> ()
+  | Some scope -> return (Hashtbl.set scope ~key:name.lexeme ~data:true)
+  | None -> return ()
 
 and resolve_local resolver name =
   let nearest_scope =

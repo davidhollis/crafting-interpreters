@@ -307,12 +307,14 @@ and parse_print_stmt parser =
   >>= fun () -> return (Stmt.Print expr)
 
 and parse_return_stmt parser =
-  if match_any parser [ Token.Semicolon ] then return (Stmt.Return None)
+  let return_token = previous parser in
+  if match_any parser [ Token.Semicolon ] then
+    return (Stmt.Return (return_token, None))
   else
     parse_expression parser >>= fun expr ->
     consume parser Token.Semicolon
       "expected semicolon at the end of a print statement"
-    >>= fun () -> return (Stmt.Return (Some expr))
+    >>= fun () -> return (Stmt.Return (return_token, Some expr))
 
 and parse_while_stmt parser =
   consume parser Token.LeftParen "expected '(' after 'while'" >>= fun () ->

@@ -23,7 +23,7 @@ module Stmt = struct
         Token.t
         * Token.t list
         * t list (* fun <identifier> (<identifier-list,>) { <stmt-list;> } *)
-    | Return of Expr.t option (* return [<expr>] *)
+    | Return of Token.t * Expr.t option (* return [<expr>] *)
   [@@deriving show]
 end
 
