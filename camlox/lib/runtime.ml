@@ -12,7 +12,12 @@ module rec Value : sig
     closure : Environment.t;
   }
 
-  and cls = { class_name : string; methods : (string, fn) Hashtbl.t }
+  and cls = {
+    class_name : string;
+    superclass : cls option;
+    methods : (string, fn) Hashtbl.t;
+  }
+
   and instance = { klass : cls; fields : (string, t) Hashtbl.t }
 
   and t =
@@ -46,7 +51,11 @@ end = struct
   }
   [@@deriving show]
 
-  and cls = { class_name : string; methods : ((string, fn) Hashtbl.t[@opaque]) }
+  and cls = {
+    class_name : string;
+    superclass : cls option;
+    methods : ((string, fn) Hashtbl.t[@opaque]);
+  }
   [@@deriving show]
 
   and instance = { klass : cls; fields : ((string, t) Hashtbl.t[@opaque]) }
@@ -104,7 +113,7 @@ end = struct
   let instantiate klass =
     Value.Instance { klass; fields = Hashtbl.create (module String) }
 
-  let lookup_method klass method_name ~bind =
+  let rec lookup_method klass method_name ~bind =
     match Hashtbl.find klass.methods method_name with
     | Some { name; params; body; closure; fn_type } ->
         let binding = Environment.create_from closure in
@@ -112,7 +121,9 @@ end = struct
           Token.{ tpe = This; lexeme = "this"; line = -1 }
           bind;
         Some (Value.Function { name; fn_type; params; body; closure = binding })
-    | None -> None
+    | None ->
+        Option.bind klass.superclass ~f:(fun sc ->
+            lookup_method sc method_name ~bind)
 end
 
 and Environment : sig

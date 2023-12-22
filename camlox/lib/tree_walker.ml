@@ -190,7 +190,20 @@ and execute_stmt tree_walker = function
       Option.(expr >>| evaluate_expr tree_walker)
       |> Option.value ~default:(return Value.Nil)
       >>= fun retval -> fail (`Return retval)
-  | Stmt.Class (name, method_defns) ->
+  | Stmt.Class (name, superclass, method_defns) ->
+      (match superclass with
+      | Some superclass_expr -> (
+          match evaluate_expr tree_walker superclass_expr with
+          | Ok (Value.Class class_defn) -> return (Some class_defn)
+          | Ok v ->
+              runtime_error tree_walker name.line
+                (Printf.sprintf
+                   "while defining class %s: superclass expression must \
+                    evaluate to a class (got %s)"
+                   (Token.print name) (Value.to_string v))
+          | Error _ as err -> err)
+      | None -> return None)
+      >>= fun resolved_superclass ->
       let methods = Hashtbl.create (module String) in
       List.iter method_defns ~f:(fun (name, params, body) ->
           let method_name = Token.print name in
@@ -208,7 +221,12 @@ and execute_stmt tree_walker = function
                 });
       return
         (declare_var tree_walker name
-           (Value.Class { class_name = Token.print name; methods }))
+           (Value.Class
+              {
+                class_name = Token.print name;
+                superclass = resolved_superclass;
+                methods;
+              }))
 
 and execute_block tree_walker stmts env =
   let previous = tree_walker.environment in

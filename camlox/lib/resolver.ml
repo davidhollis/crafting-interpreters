@@ -80,10 +80,14 @@ and visit_statement resolver = function
           match expr with
           | Some expr -> visit_expr resolver expr
           | None -> return ()))
-  | Stmt.Class (name, methods) ->
+  | Stmt.Class (name, superclass, methods) ->
       let enclosing = resolver.current_class_type in
       resolver.current_class_type <- Class;
       declare resolver name >>= fun () ->
+      (match superclass with
+      | Some superclass_expr -> visit_expr resolver superclass_expr
+      | None -> return ())
+      >>= fun () ->
       define resolver name >>= fun () ->
       begin_scope resolver >>= fun () ->
       Option.iter (Stack.top resolver.scopes) ~f:(fun new_scope ->

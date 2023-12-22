@@ -26,9 +26,8 @@ module Stmt = struct
     | Function of function_definition
       (* fun <identifier> (<identifier-list,>) { <stmt-list;> } *)
     | Return of Token.t * Expr.t option (* return [<expr>] *)
-    | Class of
-        Token.t
-        * function_definition list (* class <identifier> { <method-list> } *)
+    | Class of Token.t * Expr.t option * function_definition list
+      (* class <identifier> [< <identifier>] { <method-list> } *)
   [@@deriving show]
 end
 

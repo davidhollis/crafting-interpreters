@@ -260,6 +260,10 @@ and parse_var_decl parser =
 and parse_class parser =
   consume parser Token.Identifier "Expected class name" >>= fun () ->
   let name_token = previous parser in
+  (if match_any parser [ Token.Less ] then
+     parse_expression parser >>| fun expr -> Some expr
+   else return None)
+  >>= fun superclass ->
   consume parser Token.LeftBrace "Expected '{' before class body." >>= fun () ->
   let rec parse_method_list methods =
     if is_at_end parser || check parser Token.RightBrace then return methods
@@ -272,7 +276,8 @@ and parse_class parser =
             "Unexected output from parse_function: not a function"
   in
   parse_method_list [] >>= fun methods ->
-  return (Stmt.Class (name_token, List.rev methods)) >>= fun klass ->
+  return (Stmt.Class (name_token, superclass, List.rev methods))
+  >>= fun klass ->
   consume parser Token.RightBrace "Expected '}' after class body" >>| fun () ->
   klass
 
