@@ -117,9 +117,7 @@ end = struct
     match Hashtbl.find klass.methods method_name with
     | Some { name; params; body; closure; fn_type } ->
         let binding = Environment.create_from closure in
-        Environment.declare binding
-          Token.{ tpe = This; lexeme = "this"; line = -1 }
-          bind;
+        Environment.declare binding Token.fake_this bind;
         Some (Value.Function { name; fn_type; params; body; closure = binding })
     | None ->
         Option.bind klass.superclass ~f:(fun sc ->

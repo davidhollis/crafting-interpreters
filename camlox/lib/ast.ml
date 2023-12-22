@@ -10,6 +10,7 @@ module Expr = struct
     | Unary of Token.t * t (* <op> <expr> *)
     | Assign of Token.t * t (* <identifier> = <expr> *)
     | Set of t * Token.t * t (* <expr> . <identifier> = <expr> *)
+    | SuperAccess of Token.t * Token.t (* super . <identifier> *)
   [@@deriving show]
 end
 
@@ -79,6 +80,7 @@ module Printer = struct
     | Expr.Unary (op, _) -> "unary " ^ Token.print op
     | Expr.Assign (name, _) -> "def " ^ Token.print name
     | Expr.Set (_, name, _) -> "set " ^ Token.print name
+    | Expr.SuperAccess (_, name) -> "lookup super " ^ Token.print name
 
   let children = function
     | Expr.Binary (left, _, right) -> [ left; right ]
@@ -89,6 +91,7 @@ module Printer = struct
     | Expr.Unary (_, expr) -> [ expr ]
     | Expr.Assign (_, body) -> [ body ]
     | Expr.Set (lvalue, _, rvalue) -> [ lvalue; rvalue ]
+    | Expr.SuperAccess _ -> []
 
   let render_expr p expr = p (name expr) (children expr)
 

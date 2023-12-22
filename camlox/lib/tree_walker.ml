@@ -147,6 +147,32 @@ let rec evaluate_expr tree_walker = function
       | _ ->
           runtime_error tree_walker property.line
             "Only instances have properties")
+  | Expr.SuperAccess (super_keyword, method_name) -> (
+      match Resolver.lookup tree_walker.resolved super_keyword with
+      | Some depth -> (
+          Environment.get_resolved tree_walker.environment super_keyword ~depth
+          >>= function
+          | Value.Class super -> (
+              Environment.get_resolved tree_walker.environment Token.fake_this
+                ~depth:(depth - 1)
+              >>= fun this ->
+              match
+                Value.lookup_method super (Token.print method_name) ~bind:this
+              with
+              | Some bound_method -> return bound_method
+              | None ->
+                  runtime_error tree_walker method_name.line
+                    (Printf.sprintf "Undefined method %s"
+                       (Token.print method_name)))
+          | v ->
+              runtime_error tree_walker super_keyword.line
+                (Printf.sprintf
+                   "The superclass at this location isn't a class for some \
+                    reason (it's %s)"
+                   (Value.to_string v)))
+      | None ->
+          runtime_error tree_walker super_keyword.line
+            "Unable to locate superclass")
   | unknown_form ->
       runtime_error tree_walker (-1)
         ("Unknown expression form: " ^ Printer.print_sexpr unknown_form)
@@ -204,7 +230,15 @@ and execute_stmt tree_walker = function
           | Error _ as err -> err)
       | None -> return None)
       >>= fun resolved_superclass ->
-      let methods = Hashtbl.create (module String) in
+      let methods = Hashtbl.create (module String)
+      and closure =
+        match resolved_superclass with
+        | Some super ->
+            let closure_env = Environment.create_from tree_walker.environment in
+            Environment.declare closure_env Token.fake_super (Value.Class super);
+            closure_env
+        | None -> tree_walker.environment
+      in
       List.iter method_defns ~f:(fun (name, params, body) ->
           let method_name = Token.print name in
           Hashtbl.set methods ~key:method_name
@@ -217,7 +251,7 @@ and execute_stmt tree_walker = function
                      else Method);
                   params;
                   body;
-                  closure = tree_walker.environment;
+                  closure;
                 });
       return
         (declare_var tree_walker name
@@ -283,9 +317,7 @@ and call_value tree_walker line args = function
         match fn_type with
         | Initializer ->
             (* Initializers always return `this` *)
-            Environment.get_resolved closure
-              Token.{ tpe = Token.This; lexeme = "this"; line = -1 }
-              ~depth:0
+            Environment.get_resolved closure Token.fake_this ~depth:0
         | _ -> return return_value)
   | Value.Class klass -> (
       let new_instance = Value.instantiate klass in

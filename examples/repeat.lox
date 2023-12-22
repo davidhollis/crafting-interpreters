@@ -1,0 +1,27 @@
+class Repeater {
+    init(times) {
+        this.times = times;
+    }
+
+    repeat(action) {
+        var done = 0;
+        while (done < this.times) {
+            action();
+            done = done + 1;
+        }
+    }
+}
+
+class Greeter {
+    init(recipient) {
+        this.recipient = recipient;
+    }
+
+    greet() {
+        print "Hello, " + this.recipient + "!";
+    }
+}
+
+var repeater = Repeater(5);
+var greeter = Greeter("Lox");
+repeater.repeat(greeter.greet);

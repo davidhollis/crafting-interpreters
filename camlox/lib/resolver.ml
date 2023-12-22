@@ -8,7 +8,7 @@ let lookup (table : resolved_symbols) symbol = Hashtbl.find table symbol
 let empty_table () = Hashtbl.create (module Token)
 
 type function_type = NoFunction | Function | Method | Initializer
-type class_type = NoClass | Class
+type class_type = NoClass | Class | Subclass
 
 type t = {
   error_reporter : Errors.t;
@@ -85,10 +85,18 @@ and visit_statement resolver = function
       resolver.current_class_type <- Class;
       declare resolver name >>= fun () ->
       (match superclass with
-      | Some superclass_expr -> visit_expr resolver superclass_expr
+      | Some superclass_expr ->
+          resolver.current_class_type <- Subclass;
+          visit_expr resolver superclass_expr
       | None -> return ())
       >>= fun () ->
       define resolver name >>= fun () ->
+      (if Option.is_some superclass then
+         begin_scope resolver >>| fun () ->
+         Option.iter (Stack.top resolver.scopes) ~f:(fun new_scope ->
+             Hashtbl.set new_scope ~key:"super" ~data:true)
+       else return ())
+      >>= fun () ->
       begin_scope resolver >>= fun () ->
       Option.iter (Stack.top resolver.scopes) ~f:(fun new_scope ->
           Hashtbl.set new_scope ~key:"this" ~data:true);
@@ -100,7 +108,9 @@ and visit_statement resolver = function
               (if String.(method_name.lexeme = "init") then Initializer
                else Method))
       >>= fun () ->
-      end_scope resolver >>| fun () -> resolver.current_class_type <- enclosing
+      end_scope resolver >>= fun () ->
+      (if Option.is_some superclass then end_scope resolver else return ())
+      >>| fun () -> resolver.current_class_type <- enclosing
 
 and visit_expr resolver = function
   | Expr.Binary (left, _, right) ->
@@ -127,13 +137,22 @@ and visit_expr resolver = function
       | NoClass ->
           resolution_error ~at_token:name resolver
             "illegal use of 'this' outside of a class."
-      | Class -> return (resolve_local resolver name))
+      | Class | Subclass -> return (resolve_local resolver name))
   | Expr.Literal _ -> return ()
   | Expr.Unary (_, right) -> visit_expr resolver right
   | Expr.Assign (name, rexpr) ->
       visit_expr resolver rexpr >>| fun () -> resolve_local resolver name
   | Expr.Set (lvalue, _, rvalue) ->
       visit_expr resolver rvalue >>= fun () -> visit_expr resolver lvalue
+  | Expr.SuperAccess (super_keyword, _) -> (
+      match resolver.current_class_type with
+      | Subclass -> return (resolve_local resolver super_keyword)
+      | Class ->
+          resolution_error ~at_token:super_keyword resolver
+            "Cannot use 'super' inside a class with no superlcass"
+      | NoClass ->
+          resolution_error ~at_token:super_keyword resolver
+            "Cannot use 'super' outside of a class")
 
 and resolve_function resolver (_, args, body) ~function_type =
   let enclosing = resolver.current_function_type in

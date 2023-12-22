@@ -78,6 +78,8 @@ let describe tok =
     tok.tpe tok.lexeme tok.line
 
 let print tok = tok.lexeme
+let fake_this = { tpe = This; lexeme = "this"; line = -1 }
+let fake_super = { tpe = Super; lexeme = "super"; line = -1 }
 
 let has_type tok tpe =
   match (tok, tpe) with

@@ -1,0 +1,27 @@
+fun add_blah_method(klass) {
+    class WithBlah < klass {
+        blah() {
+            print "there's now a blah method";
+        }
+    }
+
+    return WithBlah;
+}
+
+class Foo {
+    huh() {
+        print "there was always a huh method";
+    }
+}
+
+// Can't do _this_ in vanilla Lox!
+class Bar < add_blah_method(Foo) {
+    blah() {
+        super.blah();
+        print "...which was overridden";
+    }
+}
+
+var b = Bar();
+b.huh();
+b.blah();

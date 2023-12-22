@@ -178,6 +178,11 @@ and parse_primary parser =
     consume parser Token.RightParen
       "expected closing paren ')' after expression"
     >>| fun () -> Expr.Grouping inner
+  else if match_any parser [ Token.Super ] then
+    let super_keyword = previous parser in
+    consume parser Token.Dot "expected '.' after 'super'" >>= fun () ->
+    consume parser Token.Identifier "expected method name in super access"
+    >>| fun () -> Expr.SuperAccess (super_keyword, previous parser)
   else parse_error parser "expected some kind of expression"
 
 let rec parse_program parser =
