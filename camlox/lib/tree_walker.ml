@@ -80,6 +80,10 @@ let rec evaluate_expr tree_walker = function
           return (Value.Number (ln +. rn))
       | Token.Plus, Value.String ls, Value.String rs ->
           return (Value.String (ls ^ rs))
+      | Token.Plus, Value.String ls, _ ->
+          return (Value.String (ls ^ Value.to_string right))
+      | Token.Plus, _, Value.String rs ->
+          return (Value.String ((Value.to_string left) ^ rs))
       | Token.Minus, Value.Number ln, Value.Number rn ->
           return (Value.Number (ln -. rn))
       | Token.Asterisk, Value.Number ln, Value.Number rn ->
@@ -112,7 +116,7 @@ let rec evaluate_expr tree_walker = function
       | Token.LessEqual, _, _ ->
           runtime_error tree_walker line
             (Printf.sprintf "Cannot apply binary operator %s to values %s, %s"
-               (Token.print op_token) (Value.show left) (Value.show right))
+               (Token.print op_token) (Value.to_string left) (Value.to_string right))
       | _ ->
           runtime_error tree_walker line
             ("Invalid binary operator " ^ Token.print op_token))
