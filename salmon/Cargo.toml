@@ -1,0 +1,19 @@
+[package]
+name = "salmon"
+version = "0.1.0"
+edition = "2021"
+default-run = "salmon"
+
+
+[dependencies]
+
+
+# Build Targets
+
+[lib]
+name = "salmon"
+path = "src/lib.rs"
+
+[[bin]]
+name = "salmon"
+path = "bin/salmon.rs"
