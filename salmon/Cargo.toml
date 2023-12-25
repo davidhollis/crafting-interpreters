@@ -6,6 +6,9 @@ default-run = "salmon"
 
 
 [dependencies]
+miette = { version = "5.10.0", features = ["fancy"] }
+termcolor = "1.4.0"
+thiserror = "1.0.51"
 
 
 # Build Targets
@@ -17,3 +20,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "salmon"
 path = "bin/salmon.rs"
+
+[[example]]
+name = "disassembler"
