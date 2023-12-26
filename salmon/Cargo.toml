@@ -23,3 +23,6 @@ path = "bin/salmon.rs"
 
 [[example]]
 name = "disassembler"
+
+[[example]]
+name = "tracing"

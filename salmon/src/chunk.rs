@@ -1,4 +1,4 @@
-use miette::{Diagnostic, Result};
+use miette::{Diagnostic, ErrReport, Result};
 use thiserror::Error;
 
 use crate::value::Value;
@@ -11,13 +11,13 @@ pub enum Opcode {
 }
 
 impl TryFrom<u8> for Opcode {
-    type Error = DecodeError;
+    type Error = ErrReport;
 
     fn try_from(byte: u8) -> Result<Self, Self::Error> {
         match byte {
             x if x == Opcode::Constant as u8 => Ok(Opcode::Constant),
             x if x == Opcode::Return as u8 => Ok(Opcode::Return),
-            _ => Err(DecodeError::NoSuchInstruction(byte)),
+            _ => Err(DecodeError::NoSuchInstruction(byte).into()),
         }
     }
 }
@@ -30,7 +30,7 @@ pub enum DecodeError {
 
 pub struct Chunk {
     code: Vec<u8>,
-    lines: Vec<usize>,
+    locations: Vec<usize>,
     constants: Vec<Value>,
 }
 
@@ -38,14 +38,14 @@ impl Chunk {
     pub fn new() -> Chunk {
         Chunk {
             code: vec![],
-            lines: vec![],
+            locations: vec![],
             constants: vec![],
         }
     }
 
     pub fn write_byte(&mut self, byte: u8, line: usize) -> &mut Self {
         self.code.push(byte);
-        self.lines.push(line);
+        self.locations.push(line);
         self
     }
 
@@ -55,8 +55,8 @@ impl Chunk {
             .ok_or(ChunkError::InvalidOffset(offset).into())
     }
 
-    pub fn line(&self, offset: usize) -> Result<&usize> {
-        self.lines
+    pub fn location(&self, offset: usize) -> Result<&usize> {
+        self.locations
             .get(offset)
             .ok_or(ChunkError::InvalidOffset(offset).into())
     }

@@ -2,7 +2,10 @@ use miette::{IntoDiagnostic, Result};
 use std::io::Write;
 use termcolor::{Buffer, BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
-use crate::chunk::{Chunk, Opcode};
+use crate::{
+    chunk::{Chunk, Opcode},
+    vm::tracing::Tracer,
+};
 
 pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
     let mut offset = 0usize;
@@ -20,8 +23,8 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
         line.set_color(ColorSpec::new().set_fg(Some(Color::White)).set_dimmed(true))
             .into_diagnostic()?;
         write!(line, "{:04} ", offset).into_diagnostic()?;
-        let line_number = chunk.line(offset)?;
-        if offset > 0 && line_number == chunk.line(offset - 1)? {
+        let line_number = chunk.location(offset)?;
+        if offset > 0 && line_number == chunk.location(offset - 1)? {
             write!(line, "   . ").into_diagnostic()?;
         } else {
             write!(line, "{:4} ", line_number).into_diagnostic()?;
@@ -33,6 +36,7 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
             color(&mut line, Color::Red)?;
             writeln!(line, "! Error").into_diagnostic()?;
         }
+        line.reset().into_diagnostic()?;
         out.print(&line).into_diagnostic()?;
 
         // Advance the pointer
@@ -76,4 +80,33 @@ fn render_constant(
 fn color(buf: &mut Buffer, color: Color) -> Result<()> {
     buf.set_color(ColorSpec::new().set_fg(Some(color)))
         .into_diagnostic()
+}
+
+pub struct DisassemblingTracer {
+    out: BufferWriter,
+    line_buffer: Buffer,
+}
+
+impl DisassemblingTracer {
+    pub fn new() -> DisassemblingTracer {
+        let out = BufferWriter::stdout(ColorChoice::Auto);
+        let line_buffer = out.buffer();
+        DisassemblingTracer { out, line_buffer }
+    }
+}
+
+impl Tracer for DisassemblingTracer {
+    fn enter_instruction(&mut self, chunk: &Chunk, offset: usize) -> () {
+        let res = disassemble_instruction_at(chunk, offset, &mut self.line_buffer);
+        if res.is_err() {
+            color(&mut self.line_buffer, Color::Red).unwrap();
+            writeln!(self.line_buffer, "! Error").unwrap();
+        }
+        self.line_buffer.reset().unwrap();
+        self.out.print(&self.line_buffer).unwrap();
+    }
+
+    fn exit_instruction(&mut self) -> () {
+        self.line_buffer = self.out.buffer();
+    }
 }
