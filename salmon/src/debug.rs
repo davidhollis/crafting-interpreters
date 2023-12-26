@@ -4,6 +4,7 @@ use termcolor::{Buffer, BufferWriter, Color, ColorChoice, ColorSpec, WriteColor}
 
 use crate::{
     chunk::{Chunk, Opcode},
+    value::Value,
     vm::tracing::Tracer,
 };
 
@@ -49,6 +50,11 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
 fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -> Result<usize> {
     match (*chunk.byte(offset)?).try_into()? {
         Opcode::Return => render_simple_instruction("Return", offset, line),
+        Opcode::Add => render_simple_instruction("Add", offset, line),
+        Opcode::Subtract => render_simple_instruction("Subtract", offset, line),
+        Opcode::Multiply => render_simple_instruction("Multiply", offset, line),
+        Opcode::Divide => render_simple_instruction("Divide", offset, line),
+        Opcode::Negate => render_simple_instruction("Negate", offset, line),
         Opcode::Constant => render_constant("Constant", offset, chunk, line),
     }
 }
@@ -96,7 +102,13 @@ impl DisassemblingTracer {
 }
 
 impl Tracer for DisassemblingTracer {
-    fn enter_instruction(&mut self, chunk: &Chunk, offset: usize) -> () {
+    fn enter_instruction(&mut self, chunk: &Chunk, offset: usize, stack: Vec<&Value>) -> () {
+        color(&mut self.line_buffer, Color::Magenta).unwrap();
+        for v in stack {
+            write!(self.line_buffer, "[ {} ]", v.show()).unwrap();
+        }
+        self.line_buffer.reset().unwrap();
+        writeln!(self.line_buffer, "").unwrap();
         let res = disassemble_instruction_at(chunk, offset, &mut self.line_buffer);
         if res.is_err() {
             color(&mut self.line_buffer, Color::Red).unwrap();

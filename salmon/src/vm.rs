@@ -1,7 +1,12 @@
 use miette::{Diagnostic, Result, SourceOffset};
 use thiserror::Error;
 
-use crate::chunk::{Chunk, Opcode};
+use crate::{
+    chunk::{Chunk, Opcode},
+    value::Value,
+};
+
+const STACK_SIZE: usize = 255;
 
 pub trait VMState {}
 
@@ -36,11 +41,18 @@ impl VM<Initialized> {
 pub struct Running<'a> {
     chunk: &'a Chunk,
     ip: usize,
+    stack: [Value; STACK_SIZE],
+    stack_offset: usize,
 }
 
 impl<'a> Running<'a> {
     fn new(chunk: &'a Chunk) -> Running<'a> {
-        Running { chunk, ip: 0 }
+        Running {
+            chunk,
+            ip: 0,
+            stack: [Value(0.0); STACK_SIZE],
+            stack_offset: 0,
+        }
     }
 }
 
@@ -62,7 +74,15 @@ impl<'a> VM<Running<'a>> {
 
     fn trace<T: tracing::Tracer>(mut self, tracer: &mut T) -> VM<Stopped> {
         loop {
-            tracer.enter_instruction(self.state.chunk, self.state.ip);
+            tracer.enter_instruction(
+                self.state.chunk,
+                self.state.ip,
+                self.state
+                    .stack
+                    .iter()
+                    .take(self.state.stack_offset)
+                    .collect(),
+            );
             match self.next_opcode() {
                 Ok(op) => {
                     let execution_result = self.execute_instruction(op);
@@ -80,11 +100,44 @@ impl<'a> VM<Running<'a>> {
 
     fn execute_instruction(&mut self, op: Opcode) -> Result<RuntimeAction> {
         match op {
-            Opcode::Return => Ok(RuntimeAction::Halt),
+            Opcode::Return => {
+                println!("{}", self.pop().show());
+                Ok(RuntimeAction::Halt)
+            }
+            Opcode::Add => {
+                match (self.pop(), self.pop()) {
+                    (Value(right), Value(left)) => self.push(Value(left + right)),
+                }
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Subtract => {
+                match (self.pop(), self.pop()) {
+                    (Value(right), Value(left)) => self.push(Value(left - right)),
+                }
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Multiply => {
+                match (self.pop(), self.pop()) {
+                    (Value(right), Value(left)) => self.push(Value(left * right)),
+                }
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Divide => {
+                match (self.pop(), self.pop()) {
+                    (Value(right), Value(left)) => self.push(Value(left / right)),
+                }
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Negate => {
+                match self.pop() {
+                    Value(v) => self.push(Value(-v)),
+                }
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Constant => {
                 let const_idx = self.next_byte()?;
                 let constant = self.state.chunk.constant_at(const_idx)?;
-                println!("Constant: {}", constant.show());
+                self.push(constant.clone());
                 Ok(RuntimeAction::Continue)
             }
         }
@@ -100,6 +153,16 @@ impl<'a> VM<Running<'a>> {
         let current_byte = self.state.chunk.byte(self.state.ip)?;
         self.state.ip += 1;
         (*current_byte).try_into()
+    }
+
+    fn push(&mut self, value: Value) -> () {
+        self.state.stack[self.state.stack_offset] = value;
+        self.state.stack_offset += 1;
+    }
+
+    fn pop(&mut self) -> Value {
+        self.state.stack_offset -= 1;
+        self.state.stack[self.state.stack_offset]
     }
 
     fn halt(self, result: Result<()>) -> VM<Stopped> {
@@ -145,10 +208,10 @@ pub enum RuntimeError {
 }
 
 pub mod tracing {
-    use crate::chunk::Chunk;
+    use crate::{chunk::Chunk, value::Value};
 
     pub trait Tracer {
-        fn enter_instruction(&mut self, chunk: &Chunk, offset: usize) -> ();
+        fn enter_instruction(&mut self, chunk: &Chunk, offset: usize, stack: Vec<&Value>) -> ();
         fn exit_instruction(&mut self) -> ();
     }
 }

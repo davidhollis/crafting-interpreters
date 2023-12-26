@@ -1,0 +1,16 @@
+fun echo(n) {
+    print n;
+    return n;
+}
+
+print echo(echo(1) + echo(2)) + echo(echo(4) + echo(5));
+
+// Should print:
+
+// 1    -- from echo(1)
+// 2    -- from echo(2)
+// 3    -- from echo(1 + 2)
+// 4    -- from echo(4)
+// 5    -- from echo(5)
+// 9    -- from echo(4 + 5)
+// 12   -- from print (1 + 2) + (4 + 5)

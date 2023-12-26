@@ -7,6 +7,11 @@ use crate::value::Value;
 #[derive(Debug)]
 pub enum Opcode {
     Constant,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Negate,
     Return,
 }
 
@@ -16,6 +21,11 @@ impl TryFrom<u8> for Opcode {
     fn try_from(byte: u8) -> Result<Self, Self::Error> {
         match byte {
             x if x == Opcode::Constant as u8 => Ok(Opcode::Constant),
+            x if x == Opcode::Add as u8 => Ok(Opcode::Add),
+            x if x == Opcode::Subtract as u8 => Ok(Opcode::Subtract),
+            x if x == Opcode::Multiply as u8 => Ok(Opcode::Multiply),
+            x if x == Opcode::Divide as u8 => Ok(Opcode::Divide),
+            x if x == Opcode::Negate as u8 => Ok(Opcode::Negate),
             x if x == Opcode::Return as u8 => Ok(Opcode::Return),
             _ => Err(DecodeError::NoSuchInstruction(byte).into()),
         }
