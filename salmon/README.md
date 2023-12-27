@@ -2,4 +2,6 @@
 
 This is a lox compiler and bytecode interpreter in the style of Part 2 of _Crafting Interpreters_, but written in Rust. It's incomplete at the moment, but I'm working on it!
 
-Entry point: `cargo run`
+To run a script file: `cargo run -- path/to/script.lox`
+
+To start a REPL: `cargo run`

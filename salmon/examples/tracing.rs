@@ -35,5 +35,5 @@ fn main() -> Result<()> {
 
     let vm = vm::new();
     let vm = vm.trace(&test_chunk, &mut tracer);
-    vm.result()
+    vm.finish()
 }

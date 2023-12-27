@@ -3,9 +3,11 @@ name = "salmon"
 version = "0.1.0"
 edition = "2021"
 default-run = "salmon"
+description = "A lox implementation in rust"
 
 
 [dependencies]
+clap = { version = "4.4.11", features = ["derive"] }
 miette = { version = "5.10.0", features = ["fancy"] }
 termcolor = "1.4.0"
 thiserror = "1.0.51"

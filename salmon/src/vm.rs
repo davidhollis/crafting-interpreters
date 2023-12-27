@@ -14,27 +14,9 @@ pub struct VM<S: VMState> {
     state: S,
 }
 
-pub fn new() -> VM<Initialized> {
-    VM { state: Initialized }
-}
-
-pub struct Initialized;
-
-impl VMState for Initialized {}
-
-impl VM<Initialized> {
-    pub fn interpret(self, chunk: &Chunk) -> VM<Stopped> {
-        let running = VM {
-            state: Running::new(chunk),
-        };
-        running.run()
-    }
-
-    pub fn trace<T: tracing::Tracer>(self, chunk: &Chunk, tracer: &mut T) -> VM<Stopped> {
-        let running = VM {
-            state: Running::new(chunk),
-        };
-        running.trace(tracer)
+pub fn new() -> VM<Stopped> {
+    VM {
+        state: Stopped { result: Ok(()) },
     }
 }
 
@@ -184,13 +166,29 @@ pub struct Stopped {
 impl VMState for Stopped {}
 
 impl VM<Stopped> {
-    pub fn result(self) -> Result<()> {
-        self.state.result
+    pub fn interpret(self, chunk: &Chunk) -> VM<Stopped> {
+        let running = VM {
+            state: Running::new(chunk),
+        };
+        running.run()
     }
 
-    // pub fn result_ref(&self) -> Result<&()> {
-    //     self.state.result.as_ref()
-    // }
+    pub fn trace<T: tracing::Tracer>(self, chunk: &Chunk, tracer: &mut T) -> VM<Stopped> {
+        let running = VM {
+            state: Running::new(chunk),
+        };
+        running.trace(tracer)
+    }
+
+    pub fn extract_result(mut self) -> (Self, Result<()>) {
+        let result = self.state.result;
+        self.state.result = Ok(());
+        (self, result)
+    }
+
+    pub fn finish(self) -> Result<()> {
+        self.state.result
+    }
 }
 
 #[derive(Error, Debug, Diagnostic)]
