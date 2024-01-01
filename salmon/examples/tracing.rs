@@ -15,15 +15,15 @@ fn main() -> Result<()> {
     test_chunk
         // Constant <idx>
         .write_byte(Opcode::Constant as u8, 123)
-        .write_byte(const1_idx, 123)
+        .write_byte(const1_idx as u8, 123)
         // Constant <idx>
         .write_byte(Opcode::Constant as u8, 123)
-        .write_byte(const2_idx, 123)
+        .write_byte(const2_idx as u8, 123)
         // Add
         .write_byte(Opcode::Add as u8, 123)
         // Constant <idx>
         .write_byte(Opcode::Constant as u8, 123)
-        .write_byte(const3_idx, 123)
+        .write_byte(const3_idx as u8, 123)
         // Divide
         .write_byte(Opcode::Divide as u8, 123)
         // Negate

@@ -40,6 +40,7 @@ pub enum DecodeError {
 
 pub struct Chunk {
     code: Vec<u8>,
+    // TODO(hollis): make this a more specific source location than just a line
     locations: Vec<usize>,
     constants: Vec<Value>,
 }
@@ -75,13 +76,9 @@ impl Chunk {
         self.code.len()
     }
 
-    pub fn add_constant(&mut self, value: Value) -> u8 {
-        assert!(
-            self.constants.len() < (u8::MAX - 1).into(),
-            "Cannot have more than 255 constants in a single chunk"
-        );
+    pub fn add_constant(&mut self, value: Value) -> usize {
         self.constants.push(value);
-        self.constants.len() as u8 - 1
+        self.constants.len() - 1
     }
 
     pub fn constant_at(&self, index: u8) -> Result<&Value> {

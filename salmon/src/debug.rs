@@ -44,6 +44,16 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
         offset = new_offset?;
     }
 
+    let mut footer = out.buffer();
+    color(&mut footer, Color::Yellow)?;
+    writeln!(
+        footer,
+        "===={}====",
+        std::iter::repeat('=').take(name.len()).collect::<String>()
+    )
+    .into_diagnostic()?;
+    out.print(&footer).into_diagnostic()?;
+
     Ok(())
 }
 

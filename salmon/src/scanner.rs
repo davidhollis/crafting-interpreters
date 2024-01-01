@@ -6,10 +6,11 @@ use std::{
 use miette::{Diagnostic, Result};
 use thiserror::Error;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[repr(usize)]
 pub enum TokenType {
     // Single-character tokens
-    LeftParen,
+    LeftParen = 0,
     RightParen,
     LeftBrace,
     RightBrace,
@@ -101,6 +102,21 @@ pub struct Token<'a> {
     pub line: usize,
 }
 
+impl Token<'_> {
+    pub fn empty() -> Token<'static> {
+        Token {
+            tpe: TokenType::EOF,
+            lexeme: "",
+            source_offset: 0,
+            line: 0,
+        }
+    }
+
+    pub fn error_span(&self) -> (usize, usize) {
+        (self.source_offset, self.lexeme.len())
+    }
+}
+
 pub struct Scanner<'a> {
     source: &'a str,
     current_character: Peekable<CharIndices<'a>>,
@@ -188,6 +204,7 @@ impl<'a> Scanner<'a> {
                     character: c,
                     offset,
                     line: self.line,
+                    source_code: self.source.to_string(),
                 }
                 .into()),
             }
@@ -228,10 +245,12 @@ impl<'a> Scanner<'a> {
                 character: c,
                 offset: invalid_offset,
                 line: self.line,
+                source_code: self.source.to_string(),
             }
             .into()),
             None => Err(ScannerError::UnexpectedEOFInString {
                 string_start_offset: self.current_token_start_offset,
+                source_code: self.source.to_string(),
             }
             .into()),
         }
@@ -300,13 +319,8 @@ pub enum ScannerError {
         #[label("here")]
         offset: usize,
         line: usize,
-    },
-    #[error("unexpected end of file on line {line}")]
-    #[diagnostic(code(scanner::unexpected_eof))]
-    UnexpectedEOF {
-        #[label("here")]
-        offset: usize,
-        line: usize,
+        #[source_code]
+        source_code: String,
     },
     #[error("unexpected end of file inside a string")]
     #[diagnostic(
@@ -316,5 +330,7 @@ pub enum ScannerError {
     UnexpectedEOFInString {
         #[label("string starts here")]
         string_start_offset: usize,
+        #[source_code]
+        source_code: String,
     },
 }

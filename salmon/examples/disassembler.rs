@@ -11,7 +11,7 @@ fn main() -> Result<()> {
     test_chunk
         // Constant <idx>
         .write_byte(Opcode::Constant as u8, 123)
-        .write_byte(const_idx, 123)
+        .write_byte(const_idx as u8, 123)
         // Return
         .write_byte(Opcode::Return as u8, 123);
 

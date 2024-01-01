@@ -1,10 +1,14 @@
-use std::{fs, io, path::PathBuf};
+use std::{
+    fs,
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use clap::Parser;
 use miette::{IntoDiagnostic, Result};
 use salmon::{
     compiler::{compile, compile_repl},
-    debug::DisassemblingTracer,
+    debug::{self, DisassemblingTracer},
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -30,9 +34,23 @@ fn main() -> Result<()> {
 
     match opts.script_path {
         Some(path) => {
-            let script_file = fs::read_to_string(path).into_diagnostic()?;
+            let script_file = fs::read_to_string(path.clone()).into_diagnostic()?;
             let bytecode = compile(&script_file)?;
-            salmon::vm::new().interpret(&bytecode).finish()
+            let vm = salmon::vm::new();
+
+            let vm = if opts.debug {
+                debug::disassemble_chunk(
+                    path.file_name()
+                        .and_then(|osstr| osstr.to_str())
+                        .unwrap_or("input file"),
+                    &bytecode,
+                )?;
+                vm.trace(&bytecode, &mut debug::DisassemblingTracer::new())
+            } else {
+                vm.interpret(&bytecode)
+            };
+
+            vm.finish()
         }
         None => run_repl(opts),
     }
@@ -48,6 +66,7 @@ fn run_repl(opts: Salmon) -> Result<()> {
 
     loop {
         print!("salmon:{:04}> ", line_number);
+        io::stdout().flush().into_diagnostic()?;
         let bytes_read = stdin.read_line(&mut line).into_diagnostic()?;
         if bytes_read == 0 {
             return Ok(());
@@ -56,9 +75,10 @@ fn run_repl(opts: Salmon) -> Result<()> {
         match compile_repl(&line, line_number) {
             Ok(code) => {
                 vm = if opts.debug {
-                    vm.interpret(&code)
-                } else {
+                    debug::disassemble_chunk(&format!("repl line {}", line_number), &code)?;
                     vm.trace(&code, &mut tracer)
+                } else {
+                    vm.interpret(&code)
                 };
                 let line_result;
                 (vm, line_result) = vm.extract_result();
