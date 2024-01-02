@@ -1,8 +1,9 @@
-use miette::{Diagnostic, Result, SourceOffset};
+use miette::{Diagnostic, Result};
 use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
+    scanner::SourceLocation,
     value::Value,
 };
 
@@ -32,7 +33,7 @@ impl<'a> Running<'a> {
         Running {
             chunk,
             ip: 0,
-            stack: [Value(0.0); STACK_SIZE],
+            stack: [Value::Nil; STACK_SIZE],
             stack_offset: 0,
         }
     }
@@ -83,44 +84,109 @@ impl<'a> VM<Running<'a>> {
     fn execute_instruction(&mut self, op: Opcode) -> Result<RuntimeAction> {
         match op {
             Opcode::Return => {
-                println!("{}", self.pop().show());
+                println!("{}", self.pop()?.show());
                 Ok(RuntimeAction::Halt)
             }
+            Opcode::Equal => {
+                let right = self.pop()?;
+                let left = self.pop()?;
+                self.push(Value::Boolean(left == right))?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Greater => {
+                self.numeric_binary_operation(Opcode::Greater, |left, right| {
+                    Value::Boolean(left > right)
+                })?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Less => {
+                self.numeric_binary_operation(Opcode::Less, |left, right| {
+                    Value::Boolean(left < right)
+                })?;
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Add => {
-                match (self.pop(), self.pop()) {
-                    (Value(right), Value(left)) => self.push(Value(left + right)),
-                }
+                self.numeric_binary_operation(Opcode::Add, |left, right| {
+                    Value::Number(left + right)
+                })?;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::Subtract => {
-                match (self.pop(), self.pop()) {
-                    (Value(right), Value(left)) => self.push(Value(left - right)),
-                }
+                self.numeric_binary_operation(Opcode::Subtract, |left, right| {
+                    Value::Number(left - right)
+                })?;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::Multiply => {
-                match (self.pop(), self.pop()) {
-                    (Value(right), Value(left)) => self.push(Value(left * right)),
-                }
+                self.numeric_binary_operation(Opcode::Multiply, |left, right| {
+                    Value::Number(left * right)
+                })?;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::Divide => {
-                match (self.pop(), self.pop()) {
-                    (Value(right), Value(left)) => self.push(Value(left / right)),
-                }
+                self.numeric_binary_operation(Opcode::Divide, |left, right| {
+                    Value::Number(left / right)
+                })?;
                 Ok(RuntimeAction::Continue)
             }
-            Opcode::Negate => {
-                match self.pop() {
-                    Value(v) => self.push(Value(-v)),
-                }
+            Opcode::Not => {
+                let result = self.pop()?.is_falsy();
+                self.push(Value::Boolean(result))?;
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::Negate => match self.peek(0) {
+                Value::Number(v) => {
+                    self.pop_ignore()?;
+                    self.push(Value::Number(-v))?;
+                    Ok(RuntimeAction::Continue)
+                }
+                bad_value => {
+                    let operator_location = self.previous_opcode_location()?;
+                    Err(RuntimeError::TypeErrorUnary {
+                        operator: Opcode::Negate,
+                        value: bad_value,
+                        span: operator_location.span,
+                        line: operator_location.line,
+                    }
+                    .into())
+                }
+            },
             Opcode::Constant => {
                 let const_idx = self.next_byte()?;
                 let constant = self.state.chunk.constant_at(const_idx)?;
-                self.push(constant.clone());
+                self.push(constant.clone())?;
                 Ok(RuntimeAction::Continue)
+            }
+            Opcode::True => self
+                .push(Value::Boolean(true))
+                .map(|_| RuntimeAction::Continue),
+            Opcode::False => self
+                .push(Value::Boolean(false))
+                .map(|_| RuntimeAction::Continue),
+            Opcode::Nil => self.push(Value::Nil).map(|_| RuntimeAction::Continue),
+        }
+    }
+
+    fn numeric_binary_operation<F>(&mut self, opcode: Opcode, op: F) -> Result<()>
+    where
+        F: FnOnce(f64, f64) -> Value,
+    {
+        match (self.peek(0), self.peek(1)) {
+            (Value::Number(right), Value::Number(left)) => {
+                self.pop_ignore()?;
+                self.pop_ignore()?;
+                self.push(op(left, right))
+            }
+            (bad_right, bad_left) => {
+                let operator_location = self.previous_opcode_location()?;
+                return Err(RuntimeError::TypeErrorBinary {
+                    operator: opcode,
+                    lvalue: bad_left,
+                    rvalue: bad_right,
+                    span: operator_location.span,
+                    line: operator_location.line,
+                }
+                .into());
             }
         }
     }
@@ -137,14 +203,53 @@ impl<'a> VM<Running<'a>> {
         (*current_byte).try_into()
     }
 
-    fn push(&mut self, value: Value) -> () {
-        self.state.stack[self.state.stack_offset] = value;
-        self.state.stack_offset += 1;
+    fn previous_opcode_location(&mut self) -> Result<&SourceLocation> {
+        self.state.chunk.location(self.state.ip - 1)
     }
 
-    fn pop(&mut self) -> Value {
-        self.state.stack_offset -= 1;
-        self.state.stack[self.state.stack_offset]
+    fn push(&mut self, value: Value) -> Result<()> {
+        if self.state.stack_offset < STACK_SIZE {
+            self.state.stack[self.state.stack_offset] = value;
+            self.state.stack_offset += 1;
+            Ok(())
+        } else {
+            Err(RuntimeError::StackOverflow {
+                span: self.previous_opcode_location()?.span,
+            }
+            .into())
+        }
+    }
+
+    fn pop(&mut self) -> Result<Value> {
+        if self.state.stack_offset > 0 {
+            self.state.stack_offset -= 1;
+            Ok(self.state.stack[self.state.stack_offset])
+        } else {
+            Err(RuntimeError::StackUnderflow {
+                span: self.previous_opcode_location()?.span,
+            }
+            .into())
+        }
+    }
+
+    fn pop_ignore(&mut self) -> Result<()> {
+        if self.state.stack_offset > 0 {
+            self.state.stack_offset -= 1;
+            Ok(())
+        } else {
+            Err(RuntimeError::StackUnderflow {
+                span: self.previous_opcode_location()?.span,
+            }
+            .into())
+        }
+    }
+
+    fn peek(&self, depth: usize) -> Value {
+        if depth <= (self.state.stack_offset - 1) {
+            self.state.stack[self.state.stack_offset - depth - 1]
+        } else {
+            Value::Nil
+        }
     }
 
     fn halt(self, result: Result<()>) -> VM<Stopped> {
@@ -193,15 +298,42 @@ impl VM<Stopped> {
 
 #[derive(Error, Debug, Diagnostic)]
 pub enum RuntimeError {
-    #[error("{desc}")]
-    #[diagnostic(code(runtime::general))]
-    GeneralError {
-        desc: String,
-        #[label]
-        location: Option<SourceOffset>,
-        #[source]
-        #[diagnostic_source]
-        cause: Box<dyn Diagnostic>,
+    #[error("type error on line {line}: cannot apply operator {operator:?} to value: {value:?}")]
+    #[diagnostic(code(runtime::type_error))]
+    TypeErrorUnary {
+        operator: Opcode,
+        value: Value,
+        #[label("here")]
+        span: (usize, usize),
+        line: usize,
+    },
+    #[error("type error on line {line}: cannot apply operator {operator:?} to values: {lvalue:?} and {rvalue:?}")]
+    #[diagnostic(code(runtime::type_error))]
+    TypeErrorBinary {
+        operator: Opcode,
+        lvalue: Value,
+        rvalue: Value,
+        #[label("here")]
+        span: (usize, usize),
+        line: usize,
+    },
+    #[error("attempted to pop value from empty stack")]
+    #[diagnostic(
+        code(runtime::internal::stack_underflow),
+        help("this is an internal error that was likely caused by a bug in the compiler")
+    )]
+    StackUnderflow {
+        #[label("occurred here")]
+        span: (usize, usize),
+    },
+    #[error("stack overflow")]
+    #[diagnostic(
+        code(runtime::stack_overflow),
+        help("salmon was intentionally built with a rather small stack")
+    )]
+    StackOverflow {
+        #[label("occurred here")]
+        span: (usize, usize),
     },
 }
 

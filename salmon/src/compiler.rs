@@ -1,17 +1,17 @@
-use miette::{Diagnostic, Report, Result};
+use miette::{Diagnostic, NamedSource, Report, Result};
 use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
-    scanner::{Scanner, Token, TokenType},
+    scanner::{Scanner, SourceLocation, Token, TokenType},
     value::Value,
 };
 
-pub fn compile(source_code: &str) -> Result<Chunk> {
+pub fn compile(source_code: &str, file_name: &str) -> Result<Chunk> {
     let mut parser = Parser::new(Scanner::new(source_code), Chunk::new());
 
     if let Err(err) = parser.parse() {
-        return Err(err.with_source_code(source_code.to_string()));
+        return Err(err.with_source_code(NamedSource::new(file_name, source_code.to_string())));
     }
 
     parser.finalize()
@@ -91,12 +91,22 @@ impl<'a> Parser<'a> {
     }
 
     fn emit_byte(&mut self, byte: u8) -> () {
-        let _ = self.chunk.write_byte(byte, self.previous.line);
+        let _ = self.chunk.write_byte(byte, self.previous.location());
+    }
+
+    fn emit_byte_at(&mut self, byte: u8, location: SourceLocation) -> () {
+        let _ = self.chunk.write_byte(byte, location);
     }
 
     fn emit_bytes(&mut self, bytes: &[u8]) -> () {
         for byte in bytes {
-            let _ = self.chunk.write_byte(*byte, self.previous.line);
+            let _ = self.chunk.write_byte(*byte, self.previous.location());
+        }
+    }
+
+    fn emit_bytes_at(&mut self, bytes: &[u8], location: SourceLocation) -> () {
+        for byte in bytes {
+            let _ = self.chunk.write_byte(*byte, location.clone());
         }
     }
 
@@ -128,7 +138,7 @@ fn expression(parser: &mut Parser) -> Result<()> {
 fn number(parser: &mut Parser) -> Result<()> {
     match parser.previous.lexeme.parse() {
         Ok(num) => {
-            let const_id = parser.make_constant(Value(num))?;
+            let const_id = parser.make_constant(Value::Number(num))?;
             Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
         }
         Err(_err) => Err(ParseError::BadLiteral {
@@ -151,30 +161,53 @@ fn grouping(parser: &mut Parser) -> Result<()> {
 
 fn unary_op(parser: &mut Parser) -> Result<()> {
     let operator_type = parser.previous.tpe;
-    // TODO(hollis): also save the token span for runtime error reporting...
+    let operator_location = parser.previous.location();
 
     parse_precedence(parser, Precedence::Unary)?;
 
     match operator_type {
-        TokenType::Minus => Ok(parser.emit_byte(Opcode::Negate as u8)), // TODO(hollis): ... and pass it in here
+        TokenType::Minus => Ok(parser.emit_byte_at(Opcode::Negate as u8, operator_location)),
+        TokenType::Bang => Ok(parser.emit_byte_at(Opcode::Not as u8, operator_location)),
         _ => Err(ParseError::Bug("unary_op(unrecognized unary operator)").into()),
     }
 }
 
 fn binary_op(parser: &mut Parser) -> Result<()> {
     let operator_type = parser.previous.tpe;
-    // TODO(hollis): save the span in a manner matching unary_op
+    let operator_location = parser.previous.location();
     let rule = ParseRule::rule_for(operator_type);
 
     // We've already parsed the lefthand side, so now do the righthand side
     parse_precedence(parser, rule.precedence.next())?;
 
     match operator_type {
-        TokenType::Plus => Ok(parser.emit_byte(Opcode::Add as u8)),
-        TokenType::Minus => Ok(parser.emit_byte(Opcode::Subtract as u8)),
-        TokenType::Star => Ok(parser.emit_byte(Opcode::Multiply as u8)),
-        TokenType::Slash => Ok(parser.emit_byte(Opcode::Divide as u8)),
+        TokenType::BangEqual => {
+            Ok(parser.emit_bytes_at(&[Opcode::Equal as u8, Opcode::Not as u8], operator_location))
+        }
+        TokenType::EqualEqual => Ok(parser.emit_byte_at(Opcode::Equal as u8, operator_location)),
+        TokenType::Greater => Ok(parser.emit_byte_at(Opcode::Greater as u8, operator_location)),
+        TokenType::GreaterEqual => {
+            Ok(parser.emit_bytes_at(&[Opcode::Less as u8, Opcode::Not as u8], operator_location))
+        }
+        TokenType::Less => Ok(parser.emit_byte_at(Opcode::Less as u8, operator_location)),
+        TokenType::LessEqual => Ok(parser.emit_bytes_at(
+            &[Opcode::Greater as u8, Opcode::Not as u8],
+            operator_location,
+        )),
+        TokenType::Plus => Ok(parser.emit_byte_at(Opcode::Add as u8, operator_location)),
+        TokenType::Minus => Ok(parser.emit_byte_at(Opcode::Subtract as u8, operator_location)),
+        TokenType::Star => Ok(parser.emit_byte_at(Opcode::Multiply as u8, operator_location)),
+        TokenType::Slash => Ok(parser.emit_byte_at(Opcode::Divide as u8, operator_location)),
         _ => Err(ParseError::Bug("binary_op(unrecognized binary operator)").into()),
+    }
+}
+
+fn literal(parser: &mut Parser) -> Result<()> {
+    match parser.previous.tpe {
+        TokenType::True => Ok(parser.emit_byte(Opcode::True as u8)),
+        TokenType::False => Ok(parser.emit_byte(Opcode::False as u8)),
+        TokenType::Nil => Ok(parser.emit_byte(Opcode::Nil as u8)),
+        _ => Err(ParseError::Bug("literal(unrecognized literal type").into()),
     }
 }
 
@@ -276,21 +309,21 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Star
     ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Factor },
     // TokenType::Bang
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(unary_op), infix: None, precedence: Precedence::None },
     // TokenType::BangEqual
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Equality },
     // TokenType::Equal
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::EqualEqual
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Equality },
     // TokenType::Greater
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Equality },
     // TokenType::GreaterEqual
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Equality },
     // TokenType::Less
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Equality },
     // TokenType::LessEqual
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Equality },
     // TokenType::Identifier
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::String
@@ -304,7 +337,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Else
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::False
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(literal), infix: None, precedence: Precedence::None },
     // TokenType::For
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::Fun
@@ -312,7 +345,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::If
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::Nil
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(literal), infix: None, precedence: Precedence::None },
     // TokenType::Or
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::Print
@@ -324,7 +357,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::This
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::True
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(literal), infix: None, precedence: Precedence::None },
     // TokenType::Var
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::While

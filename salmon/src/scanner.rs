@@ -115,6 +115,19 @@ impl Token<'_> {
     pub fn error_span(&self) -> (usize, usize) {
         (self.source_offset, self.lexeme.len())
     }
+
+    pub fn location(&self) -> SourceLocation {
+        SourceLocation {
+            span: self.error_span(),
+            line: self.line,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SourceLocation {
+    pub span: (usize, usize),
+    pub line: usize,
 }
 
 pub struct Scanner<'a> {

@@ -24,11 +24,11 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
         line.set_color(ColorSpec::new().set_fg(Some(Color::White)).set_dimmed(true))
             .into_diagnostic()?;
         write!(line, "{:04} ", offset).into_diagnostic()?;
-        let line_number = chunk.location(offset)?;
-        if offset > 0 && line_number == chunk.location(offset - 1)? {
+        let location = chunk.location(offset)?;
+        if offset > 0 && location.line == chunk.location(offset - 1)?.line {
             write!(line, "   . ").into_diagnostic()?;
         } else {
-            write!(line, "{:4} ", line_number).into_diagnostic()?;
+            write!(line, "{:4} ", location.line).into_diagnostic()?;
         }
 
         // Write out the instruction
@@ -60,12 +60,19 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
 fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -> Result<usize> {
     match (*chunk.byte(offset)?).try_into()? {
         Opcode::Return => render_simple_instruction("Return", offset, line),
+        Opcode::Equal => render_simple_instruction("Equal", offset, line),
+        Opcode::Greater => render_simple_instruction("Greater", offset, line),
+        Opcode::Less => render_simple_instruction("Less", offset, line),
         Opcode::Add => render_simple_instruction("Add", offset, line),
         Opcode::Subtract => render_simple_instruction("Subtract", offset, line),
         Opcode::Multiply => render_simple_instruction("Multiply", offset, line),
         Opcode::Divide => render_simple_instruction("Divide", offset, line),
+        Opcode::Not => render_simple_instruction("Not", offset, line),
         Opcode::Negate => render_simple_instruction("Negate", offset, line),
         Opcode::Constant => render_constant("Constant", offset, chunk, line),
+        Opcode::Nil => render_simple_instruction("Nil", offset, line),
+        Opcode::True => render_simple_instruction("True", offset, line),
+        Opcode::False => render_simple_instruction("False", offset, line),
     }
 }
 

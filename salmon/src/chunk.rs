@@ -1,16 +1,23 @@
 use miette::{Diagnostic, ErrReport, Result};
 use thiserror::Error;
 
-use crate::value::Value;
+use crate::{scanner::SourceLocation, value::Value};
 
 #[repr(u8)]
 #[derive(Debug)]
 pub enum Opcode {
     Constant,
+    Nil,
+    True,
+    False,
+    Equal,
+    Greater,
+    Less,
     Add,
     Subtract,
     Multiply,
     Divide,
+    Not,
     Negate,
     Return,
 }
@@ -21,10 +28,17 @@ impl TryFrom<u8> for Opcode {
     fn try_from(byte: u8) -> Result<Self, Self::Error> {
         match byte {
             x if x == Opcode::Constant as u8 => Ok(Opcode::Constant),
+            x if x == Opcode::Nil as u8 => Ok(Opcode::Nil),
+            x if x == Opcode::True as u8 => Ok(Opcode::True),
+            x if x == Opcode::False as u8 => Ok(Opcode::False),
+            x if x == Opcode::Equal as u8 => Ok(Opcode::Equal),
+            x if x == Opcode::Greater as u8 => Ok(Opcode::Greater),
+            x if x == Opcode::Less as u8 => Ok(Opcode::Less),
             x if x == Opcode::Add as u8 => Ok(Opcode::Add),
             x if x == Opcode::Subtract as u8 => Ok(Opcode::Subtract),
             x if x == Opcode::Multiply as u8 => Ok(Opcode::Multiply),
             x if x == Opcode::Divide as u8 => Ok(Opcode::Divide),
+            x if x == Opcode::Not as u8 => Ok(Opcode::Not),
             x if x == Opcode::Negate as u8 => Ok(Opcode::Negate),
             x if x == Opcode::Return as u8 => Ok(Opcode::Return),
             _ => Err(DecodeError::NoSuchInstruction(byte).into()),
@@ -40,8 +54,7 @@ pub enum DecodeError {
 
 pub struct Chunk {
     code: Vec<u8>,
-    // TODO(hollis): make this a more specific source location than just a line
-    locations: Vec<usize>,
+    locations: Vec<SourceLocation>,
     constants: Vec<Value>,
 }
 
@@ -54,9 +67,9 @@ impl Chunk {
         }
     }
 
-    pub fn write_byte(&mut self, byte: u8, line: usize) -> &mut Self {
+    pub fn write_byte(&mut self, byte: u8, location: SourceLocation) -> &mut Self {
         self.code.push(byte);
-        self.locations.push(line);
+        self.locations.push(location);
         self
     }
 
@@ -66,7 +79,7 @@ impl Chunk {
             .ok_or(ChunkError::InvalidOffset(offset).into())
     }
 
-    pub fn location(&self, offset: usize) -> Result<&usize> {
+    pub fn location(&self, offset: usize) -> Result<&SourceLocation> {
         self.locations
             .get(offset)
             .ok_or(ChunkError::InvalidOffset(offset).into())
