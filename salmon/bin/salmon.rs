@@ -1,18 +1,14 @@
-use std::{
-    fs,
-    io::{self, Write},
-    path::PathBuf,
-};
+use std::{fs, path::PathBuf};
 
 use clap::Parser;
 use miette::{IntoDiagnostic, NamedSource, Result};
+use rustyline::error::ReadlineError;
 use salmon::{
     compiler::{compile, compile_repl},
     debug::{self, DisassemblingTracer},
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REPL_STRING_SIZE: usize = 1024;
 
 /// A lox interpreter in rust
 #[derive(Parser)]
@@ -59,39 +55,39 @@ fn run_file(path: &PathBuf, opts: &Salmon) -> Result<()> {
 }
 
 fn run_repl(opts: &Salmon) -> Result<()> {
-    // TODO(hollis): add rustyline to get readline-like functionality
-    let stdin = io::stdin();
-    let mut line = String::with_capacity(REPL_STRING_SIZE);
+    let mut rl = rustyline::DefaultEditor::new().into_diagnostic()?;
     let mut vm = salmon::vm::new();
     let mut line_number: usize = 1;
     let mut tracer = DisassemblingTracer::new();
 
     loop {
-        print!("salmon:{:04}> ", line_number);
-        io::stdout().flush().into_diagnostic()?;
-        let bytes_read = stdin.read_line(&mut line).into_diagnostic()?;
-        if bytes_read == 0 {
-            return Ok(());
-        }
-
-        match compile_repl(&line, line_number) {
-            Ok(code) => {
-                vm = if opts.debug {
-                    debug::disassemble_chunk(&format!("repl line {}", line_number), &code)?;
-                    vm.trace(&code, &mut tracer)
-                } else {
-                    vm.interpret(&code)
-                };
-                let line_result;
-                (vm, line_result) = vm.extract_result();
-                if let Err(runtime_error) = line_result {
-                    println!("{:?}", runtime_error.with_source_code(line.clone()));
+        match rl.readline(&format!("salmon:{:04}> ", line_number)) {
+            Ok(line) => {
+                let _ = rl.add_history_entry(&line);
+                match compile_repl(&line, line_number) {
+                    Ok(code) => {
+                        vm = if opts.debug {
+                            debug::disassemble_chunk(&format!("repl line {}", line_number), &code)?;
+                            vm.trace(&code, &mut tracer)
+                        } else {
+                            vm.interpret(&code)
+                        };
+                        let line_result;
+                        (vm, line_result) = vm.extract_result();
+                        if let Err(runtime_error) = line_result {
+                            println!("{:?}", runtime_error.with_source_code(line.clone()));
+                        }
+                    }
+                    Err(compile_error) => println!("{:?}", compile_error),
                 }
             }
-            Err(compile_error) => println!("{:?}", compile_error),
+            Err(ReadlineError::Eof) => {
+                println!("Bye!");
+                return Ok(());
+            }
+            Err(e) => return Err(e).into_diagnostic(),
         }
 
         line_number += 1;
-        line.clear();
     }
 }
