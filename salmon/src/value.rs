@@ -53,6 +53,7 @@ impl Value {
             Value::Object(obj_ref) => match obj_ref.as_ref() {
                 Object {
                     body: ObjectType::String { .. },
+                    ..
                 } => data_type == DataType::String,
             },
             Value::Nil => data_type == DataType::Nil,

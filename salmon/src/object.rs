@@ -3,14 +3,17 @@ use std::fmt::Debug;
 #[derive(Clone)]
 pub struct Object {
     pub body: ObjectType,
+    pub hash: u32,
 }
 
 impl Object {
     pub fn string(contents: &str) -> Object {
+        let hash = string::hash(contents);
         Object {
             body: ObjectType::String {
                 contents: contents.into(),
             },
+            hash,
         }
     }
 
@@ -59,15 +62,29 @@ pub mod string {
                 ObjectType::String {
                     contents: right_contents,
                 },
-            ) => Object {
-                body: ObjectType::String {
-                    contents: left_contents
-                        .chars()
-                        .chain(right_contents.chars())
-                        .collect::<String>()
-                        .into(),
-                },
-            },
+            ) => {
+                let contents = left_contents
+                    .chars()
+                    .chain(right_contents.chars())
+                    .collect::<String>();
+                let hash_value = hash(&contents);
+                Object {
+                    body: ObjectType::String {
+                        contents: contents.into(),
+                    },
+                    hash: hash_value,
+                }
+            }
         }
+    }
+
+    // FNV-1a
+    pub(super) fn hash(key: &str) -> u32 {
+        let mut hash = 2166136261u32;
+        for b in key.bytes() {
+            hash ^= b as u32;
+            hash = hash.wrapping_mul(16777619u32);
+        }
+        hash
     }
 }
