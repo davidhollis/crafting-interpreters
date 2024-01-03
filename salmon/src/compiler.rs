@@ -150,6 +150,13 @@ fn number(parser: &mut Parser) -> Result<()> {
     }
 }
 
+fn string(parser: &mut Parser) -> Result<()> {
+    let const_id = parser.make_constant(Value::string(
+        &parser.previous.lexeme[1..(parser.previous.lexeme.len() - 1)],
+    ))?;
+    Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
+}
+
 fn grouping(parser: &mut Parser) -> Result<()> {
     expression(parser)?;
     parser.consume(
@@ -327,7 +334,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Identifier
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::String
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(string), infix: None, precedence: Precedence::None },
     // TokenType::Number
     ParseRule { prefix: Some(number), infix: None, precedence: Precedence::None },
     // TokenType::And

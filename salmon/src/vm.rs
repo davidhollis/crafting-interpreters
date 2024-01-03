@@ -3,8 +3,9 @@ use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
+    object,
     scanner::SourceLocation,
-    value::Value,
+    value::{DataType, Value},
 };
 
 const STACK_SIZE: usize = 255;
@@ -24,7 +25,7 @@ pub fn new() -> VM<Stopped> {
 pub struct Running<'a> {
     chunk: &'a Chunk,
     ip: usize,
-    stack: [Value; STACK_SIZE],
+    stack: Box<[Value]>,
     stack_offset: usize,
 }
 
@@ -33,7 +34,7 @@ impl<'a> Running<'a> {
         Running {
             chunk,
             ip: 0,
-            stack: [Value::Nil; STACK_SIZE],
+            stack: std::iter::repeat(Value::Nil).take(STACK_SIZE).collect(),
             stack_offset: 0,
         }
     }
@@ -106,10 +107,47 @@ impl<'a> VM<Running<'a>> {
                 Ok(RuntimeAction::Continue)
             }
             Opcode::Add => {
-                self.numeric_binary_operation(Opcode::Add, |left, right| {
-                    Value::Number(left + right)
-                })?;
-                Ok(RuntimeAction::Continue)
+                let (right_view, left_view) = (self.peek(0), self.peek(1));
+                if left_view.is(DataType::Number) && right_view.is(DataType::Number) {
+                    if let (Value::Number(right_num), Value::Number(left_num)) =
+                        (self.pop()?, self.pop()?)
+                    {
+                        self.push(Value::Number(left_num + right_num))?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        Err(RuntimeError::Bug {
+                            message: "in Add: top two values on stack should've been numbers",
+                            span: self.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                } else if left_view.is(DataType::String) && right_view.is(DataType::String) {
+                    if let (Value::Object(right_str), Value::Object(left_str)) =
+                        (self.pop()?, self.pop()?)
+                    {
+                        self.push(Value::wrap(object::string::concatenate(
+                            left_str.as_ref(),
+                            right_str.as_ref(),
+                        )))?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        Err(RuntimeError::Bug {
+                            message: "in Add: top two values on stack should've been strings",
+                            span: self.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                } else {
+                    let opcode_location = self.previous_opcode_location()?;
+                    Err(RuntimeError::TypeErrorBinary {
+                        operator: Opcode::Add,
+                        lvalue: left_view,
+                        rvalue: right_view,
+                        span: opcode_location.span,
+                        line: opcode_location.line,
+                    }
+                    .into())
+                }
             }
             Opcode::Subtract => {
                 self.numeric_binary_operation(Opcode::Subtract, |left, right| {
@@ -144,7 +182,7 @@ impl<'a> VM<Running<'a>> {
                     let operator_location = self.previous_opcode_location()?;
                     Err(RuntimeError::TypeErrorUnary {
                         operator: Opcode::Negate,
-                        value: bad_value,
+                        value: bad_value.clone(),
                         span: operator_location.span,
                         line: operator_location.line,
                     }
@@ -181,8 +219,8 @@ impl<'a> VM<Running<'a>> {
                 let operator_location = self.previous_opcode_location()?;
                 return Err(RuntimeError::TypeErrorBinary {
                     operator: opcode,
-                    lvalue: bad_left,
-                    rvalue: bad_right,
+                    lvalue: bad_left.clone(),
+                    rvalue: bad_right.clone(),
                     span: operator_location.span,
                     line: operator_location.line,
                 }
@@ -203,7 +241,7 @@ impl<'a> VM<Running<'a>> {
         (*current_byte).try_into()
     }
 
-    fn previous_opcode_location(&mut self) -> Result<&SourceLocation> {
+    fn previous_opcode_location(&self) -> Result<&SourceLocation> {
         self.state.chunk.location(self.state.ip - 1)
     }
 
@@ -223,7 +261,10 @@ impl<'a> VM<Running<'a>> {
     fn pop(&mut self) -> Result<Value> {
         if self.state.stack_offset > 0 {
             self.state.stack_offset -= 1;
-            Ok(self.state.stack[self.state.stack_offset])
+            Ok(std::mem::replace(
+                &mut self.state.stack[self.state.stack_offset],
+                Value::Nil,
+            ))
         } else {
             Err(RuntimeError::StackUnderflow {
                 span: self.previous_opcode_location()?.span,
@@ -246,7 +287,7 @@ impl<'a> VM<Running<'a>> {
 
     fn peek(&self, depth: usize) -> Value {
         if depth <= (self.state.stack_offset - 1) {
-            self.state.stack[self.state.stack_offset - depth - 1]
+            self.state.stack[self.state.stack_offset - depth - 1].clone()
         } else {
             Value::Nil
         }
@@ -333,6 +374,13 @@ pub enum RuntimeError {
     )]
     StackOverflow {
         #[label("occurred here")]
+        span: (usize, usize),
+    },
+    #[error("bug in VM: {message}")]
+    #[diagnostic(code(runtime::internal::bug))]
+    Bug {
+        message: &'static str,
+        #[label("here-ish")]
         span: (usize, usize),
     },
 }
