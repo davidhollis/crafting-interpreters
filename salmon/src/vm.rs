@@ -87,9 +87,14 @@ impl<'a> VM<Running<'a>> {
 
     fn execute_instruction(&mut self, op: Opcode) -> Result<RuntimeAction> {
         match op {
-            Opcode::Return => {
+            Opcode::Print => {
                 println!("{}", self.pop()?.show());
-                Ok(RuntimeAction::Halt)
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Return => Ok(RuntimeAction::Halt),
+            Opcode::Pop => {
+                let _ = self.pop()?;
+                Ok(RuntimeAction::Continue)
             }
             Opcode::Equal => {
                 let right = self.pop()?;

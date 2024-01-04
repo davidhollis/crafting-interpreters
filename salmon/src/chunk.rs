@@ -10,6 +10,7 @@ pub enum Opcode {
     Nil,
     True,
     False,
+    Pop,
     Equal,
     Greater,
     Less,
@@ -19,6 +20,7 @@ pub enum Opcode {
     Divide,
     Not,
     Negate,
+    Print,
     Return,
 }
 
@@ -31,6 +33,7 @@ impl TryFrom<u8> for Opcode {
             x if x == Opcode::Nil as u8 => Ok(Opcode::Nil),
             x if x == Opcode::True as u8 => Ok(Opcode::True),
             x if x == Opcode::False as u8 => Ok(Opcode::False),
+            x if x == Opcode::Pop as u8 => Ok(Opcode::Pop),
             x if x == Opcode::Equal as u8 => Ok(Opcode::Equal),
             x if x == Opcode::Greater as u8 => Ok(Opcode::Greater),
             x if x == Opcode::Less as u8 => Ok(Opcode::Less),
@@ -41,6 +44,7 @@ impl TryFrom<u8> for Opcode {
             x if x == Opcode::Not as u8 => Ok(Opcode::Not),
             x if x == Opcode::Negate as u8 => Ok(Opcode::Negate),
             x if x == Opcode::Return as u8 => Ok(Opcode::Return),
+            x if x == Opcode::Print as u8 => Ok(Opcode::Print),
             _ => Err(DecodeError::NoSuchInstruction(byte).into()),
         }
     }

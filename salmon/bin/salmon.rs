@@ -40,7 +40,8 @@ fn run_file(path: &PathBuf, opts: &Salmon) -> Result<()> {
         .and_then(|osstr| osstr.to_str())
         .unwrap_or("input file");
     let script_file = fs::read_to_string(path.clone()).into_diagnostic()?;
-    let bytecode = compile(&script_file, file_name)?;
+    let bytecode = compile(&script_file)
+        .map_err(|err| err.with_source_code(NamedSource::new(file_name, script_file.clone())))?;
     let vm = salmon::vm::new();
 
     let vm = if opts.debug {
@@ -78,7 +79,9 @@ fn run_repl(opts: &Salmon) -> Result<()> {
                             println!("{:?}", runtime_error.with_source_code(line.clone()));
                         }
                     }
-                    Err(compile_error) => println!("{:?}", compile_error),
+                    Err(compile_error) => {
+                        println!("{:?}", compile_error.with_source_code(line.clone()))
+                    }
                 }
             }
             Err(ReadlineError::Eof) => {

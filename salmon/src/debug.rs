@@ -1,5 +1,5 @@
 use miette::{IntoDiagnostic, Result};
-use std::io::Write;
+use std::io::{self, Write};
 use termcolor::{Buffer, BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
 use crate::{
@@ -59,7 +59,9 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
 
 fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -> Result<usize> {
     match (*chunk.byte(offset)?).try_into()? {
+        Opcode::Print => render_simple_instruction("Print", offset, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
+        Opcode::Pop => render_simple_instruction("Pop", offset, line),
         Opcode::Equal => render_simple_instruction("Equal", offset, line),
         Opcode::Greater => render_simple_instruction("Greater", offset, line),
         Opcode::Less => render_simple_instruction("Less", offset, line),
@@ -121,8 +123,12 @@ impl DisassemblingTracer {
 impl Tracer for DisassemblingTracer {
     fn enter_instruction(&mut self, chunk: &Chunk, offset: usize, stack: Vec<&Value>) -> () {
         color(&mut self.line_buffer, Color::Magenta).unwrap();
-        for v in stack {
-            write!(self.line_buffer, "[ {} ]", v.show()).unwrap();
+        if stack.is_empty() {
+            write!(self.line_buffer, "ø").unwrap();
+        } else {
+            for v in stack {
+                write!(self.line_buffer, "[ {} ]", v.show()).unwrap();
+            }
         }
         self.line_buffer.reset().unwrap();
         writeln!(self.line_buffer, "").unwrap();
@@ -133,6 +139,7 @@ impl Tracer for DisassemblingTracer {
         }
         self.line_buffer.reset().unwrap();
         self.out.print(&self.line_buffer).unwrap();
+        io::stdout().flush().unwrap();
     }
 
     fn exit_instruction(&mut self) -> () {

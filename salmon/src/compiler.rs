@@ -1,4 +1,4 @@
-use miette::{Diagnostic, NamedSource, Report, Result};
+use miette::{Diagnostic, Report, Result};
 use thiserror::Error;
 
 use crate::{
@@ -8,26 +8,22 @@ use crate::{
     value::Value,
 };
 
-pub fn compile(source_code: &str, file_name: &str) -> Result<Chunk> {
+pub fn compile(source_code: &str) -> Result<Chunk> {
     let mut parser = Parser::new(Scanner::new(source_code), Chunk::new());
 
-    if let Err(err) = parser.parse() {
-        return Err(err.with_source_code(NamedSource::new(file_name, source_code.to_string())));
-    }
-
+    parser.parse();
     parser.finalize()
 }
 
 pub fn compile_repl(source_code: &str, line: usize, vm_strings: &Table) -> Result<Chunk> {
+    // TODO(hollis): We should handle "unexpected EOF" differently here, preserving the parser
+    //               state so that we can continue parsing across another line.
     let mut parser = Parser::new(
         Scanner::new_line(source_code, line),
         Chunk::new_with_strings(vm_strings),
     );
 
-    if let Err(err) = parser.parse() {
-        return Err(err.with_source_code(source_code.to_string()));
-    }
-
+    parser.parse();
     parser.finalize()
 }
 
@@ -36,7 +32,7 @@ struct Parser<'a> {
     previous: Token<'a>,
     current: Token<'a>,
     chunk: Chunk,
-    had_error: bool,
+    errors: Vec<ParseError>,
     panic_mode: bool,
 }
 
@@ -47,17 +43,26 @@ impl<'a> Parser<'a> {
             previous: Token::empty(),
             current: Token::empty(),
             chunk,
-            had_error: false,
+            errors: vec![],
             panic_mode: false,
         }
     }
 
-    fn parse(&mut self) -> Result<()> {
+    fn parse(&mut self) -> () {
         self.advance();
-        expression(self)?;
-        self.consume(TokenType::EOF, "expected end of expression")?;
+
+        while !self.match_token(TokenType::EOF) {
+            match declaration(self) {
+                Ok(()) => (),
+                Err(err) => self.report_and_continue(err),
+            }
+
+            if self.panic_mode {
+                self.synchronize();
+            }
+        }
+
         self.emit_byte(Opcode::Return as u8);
-        Ok(())
     }
 
     fn advance(&mut self) -> () {
@@ -86,11 +91,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn finalize(self) -> Result<Chunk> {
-        if self.had_error {
-            Err(ParseError::NoBytecode.into())
+    fn match_token(&mut self, token_type: TokenType) -> bool {
+        if self.current.tpe == token_type {
+            self.advance();
+            true
         } else {
+            false
+        }
+    }
+
+    fn finalize(self) -> Result<Chunk> {
+        if self.errors.is_empty() {
             Ok(self.chunk)
+        } else {
+            Err(ParseError::NoBytecode(self.errors).into())
         }
     }
 
@@ -117,8 +131,40 @@ impl<'a> Parser<'a> {
     fn report_and_continue(&mut self, err: Report) -> () {
         if !self.panic_mode {
             self.panic_mode = true;
-            self.had_error = true;
-            println!("{:?}", err);
+            if err.is::<ParseError>() {
+                self.errors.push(err.downcast().unwrap());
+            } else {
+                println!("{:?}", err);
+            }
+        }
+    }
+
+    fn synchronize(&mut self) -> () {
+        self.panic_mode = false;
+
+        loop {
+            if self.previous.tpe == TokenType::Semicolon {
+                // We're synchronized if the preceeding token was a semicolon
+                return;
+            }
+            match self.current.tpe {
+                TokenType::Class
+                | TokenType::Fun
+                | TokenType::Var
+                | TokenType::If
+                | TokenType::For
+                | TokenType::While
+                | TokenType::Print
+                | TokenType::Return
+                | TokenType::EOF => {
+                    // We're synchronized if the next token is a reserved word that can start a statement
+                    return;
+                }
+                // Otherwise, keep scanning to find a synchronization point
+                _ => (),
+            }
+
+            self.advance();
         }
     }
 
@@ -133,6 +179,39 @@ impl<'a> Parser<'a> {
             Ok(const_id as u8)
         }
     }
+}
+
+fn declaration(parser: &mut Parser) -> Result<()> {
+    statement(parser)
+}
+
+fn statement(parser: &mut Parser) -> Result<()> {
+    if parser.match_token(TokenType::Print) {
+        print_statement(parser)
+    } else {
+        expression_statement(parser)
+    }
+}
+
+fn print_statement(parser: &mut Parser) -> Result<()> {
+    let print_location = parser.previous.location();
+    expression(parser)?;
+    parser.consume(
+        TokenType::Semicolon,
+        "expected a semicolon at the end of a print statement",
+    )?;
+    parser.emit_byte_at(Opcode::Print as u8, print_location);
+    Ok(())
+}
+
+fn expression_statement(parser: &mut Parser) -> Result<()> {
+    expression(parser)?;
+    parser.consume(
+        TokenType::Semicolon,
+        "expected a semicolon at the end of an expression statement",
+    )?;
+    parser.emit_byte(Opcode::Pop as u8);
+    Ok(())
 }
 
 fn expression(parser: &mut Parser) -> Result<()> {
@@ -406,9 +485,9 @@ pub enum ParseError {
         #[label("the 256th constant")]
         token_span: (usize, usize),
     },
-    #[error("failed to produce bytecode due to previous error(s)")]
-    #[diagnostic(code(compiler::no_bytecode), help("see above for more details"))]
-    NoBytecode,
+    #[error("failed to produce bytecode due to the following error(s)")]
+    #[diagnostic(code(compiler::no_bytecode))]
+    NoBytecode(#[related] Vec<ParseError>),
     #[error("bug in compiler at {0}. Condition should be unreachable.")]
     #[diagnostic(code(compiler::bug))]
     Bug(&'static str),
