@@ -113,8 +113,8 @@ impl Table {
                     Entry::Full { key, .. } => match key.as_ref() {
                         Object {
                             body: ObjectType::String { contents },
-                            ..
-                        } if contents.as_ref() == key_str => {
+                            hash: entry_hash,
+                        } if *entry_hash == hash && contents.as_ref() == key_str => {
                             // We found a matching string--return it.
                             return key.clone();
                         }
