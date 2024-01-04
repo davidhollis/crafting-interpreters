@@ -1,7 +1,7 @@
 use miette::{Diagnostic, ErrReport, Result};
 use thiserror::Error;
 
-use crate::{scanner::SourceLocation, value::Value};
+use crate::{scanner::SourceLocation, table::Table, value::Value};
 
 #[repr(u8)]
 #[derive(Debug)]
@@ -56,6 +56,7 @@ pub struct Chunk {
     code: Vec<u8>,
     locations: Vec<SourceLocation>,
     constants: Vec<Value>,
+    pub strings: Table,
 }
 
 impl Chunk {
@@ -64,6 +65,18 @@ impl Chunk {
             code: vec![],
             locations: vec![],
             constants: vec![],
+            strings: Table::new(),
+        }
+    }
+
+    pub fn new_with_strings(strings: &Table) -> Chunk {
+        let mut new_table = Table::new();
+        new_table.add_all(strings);
+        Chunk {
+            code: vec![],
+            locations: vec![],
+            constants: vec![],
+            strings: new_table,
         }
     }
 

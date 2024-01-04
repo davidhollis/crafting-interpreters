@@ -64,7 +64,7 @@ fn run_repl(opts: &Salmon) -> Result<()> {
         match rl.readline(&format!("salmon:{:04}> ", line_number)) {
             Ok(line) => {
                 let _ = rl.add_history_entry(&line);
-                match compile_repl(&line, line_number) {
+                match compile_repl(&line, line_number, &vm.strings) {
                     Ok(code) => {
                         vm = if opts.debug {
                             debug::disassemble_chunk(&format!("repl line {}", line_number), &code)?;

@@ -4,6 +4,7 @@ use thiserror::Error;
 use crate::{
     chunk::{Chunk, Opcode},
     scanner::{Scanner, SourceLocation, Token, TokenType},
+    table::Table,
     value::Value,
 };
 
@@ -17,8 +18,11 @@ pub fn compile(source_code: &str, file_name: &str) -> Result<Chunk> {
     parser.finalize()
 }
 
-pub fn compile_repl(source_code: &str, line: usize) -> Result<Chunk> {
-    let mut parser = Parser::new(Scanner::new_line(source_code, line), Chunk::new());
+pub fn compile_repl(source_code: &str, line: usize, vm_strings: &Table) -> Result<Chunk> {
+    let mut parser = Parser::new(
+        Scanner::new_line(source_code, line),
+        Chunk::new_with_strings(vm_strings),
+    );
 
     if let Err(err) = parser.parse() {
         return Err(err.with_source_code(source_code.to_string()));
@@ -151,9 +155,11 @@ fn number(parser: &mut Parser) -> Result<()> {
 }
 
 fn string(parser: &mut Parser) -> Result<()> {
-    let const_id = parser.make_constant(Value::string(
-        &parser.previous.lexeme[1..(parser.previous.lexeme.len() - 1)],
-    ))?;
+    let string_literal = parser
+        .chunk
+        .strings
+        .intern_string(&parser.previous.lexeme[1..(parser.previous.lexeme.len() - 1)]);
+    let const_id = parser.make_constant(Value::Object(string_literal))?;
     Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
 }
 

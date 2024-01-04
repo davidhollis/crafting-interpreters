@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{object::Object, value::Value};
+use crate::{
+    object::{self, Object, ObjectType},
+    value::Value,
+};
 
 const MAX_LOAD: f32 = 0.75;
 
@@ -17,11 +20,11 @@ impl Table {
         }
     }
 
-    pub fn get(&self, key: &Object) -> Option<Value> {
+    pub fn get(&self, key: &Arc<Object>) -> Option<Value> {
         if self.count == 0 {
             None
         } else {
-            match self.find_entry_for(key) {
+            match self.find_entry_for(&key) {
                 Entry::Full { value, .. } => Some(value.clone()),
                 _ => None,
             }
@@ -33,7 +36,7 @@ impl Table {
             self.adjust_capacity();
         }
 
-        let entry = self.find_entry_for_mut(key.as_ref());
+        let entry = self.find_entry_for_mut(&key);
         match entry {
             Entry::Empty => {
                 // If we insert into an empty cell, increment the count
@@ -68,7 +71,7 @@ impl Table {
         }
     }
 
-    pub fn delete(&mut self, key: &Object) -> bool {
+    pub fn delete(&mut self, key: &Arc<Object>) -> bool {
         if self.count == 0 {
             false
         } else {
@@ -84,17 +87,60 @@ impl Table {
         }
     }
 
-    fn find_entry_for(&self, key: &Object) -> &Entry {
+    pub fn intern_string(&mut self, key_str: &str) -> Arc<Object> {
+        if self.count == 0 {
+            let new_string = Arc::new(Object::string(key_str));
+            self.set(new_string.clone(), Value::Nil);
+            new_string
+        } else {
+            let hash = object::string::hash(key_str);
+            let capacity = self.entries.len();
+            let mut index = hash as usize % capacity;
+
+            loop {
+                match &self.entries[index] {
+                    Entry::Empty => {
+                        // We didn't find the interned string--add and return it.
+                        let new_string = Arc::new(Object {
+                            body: ObjectType::String {
+                                contents: key_str.into(),
+                            },
+                            hash,
+                        });
+                        self.set(new_string.clone(), Value::Nil);
+                        return new_string;
+                    }
+                    Entry::Full { key, .. } => match key.as_ref() {
+                        Object {
+                            body: ObjectType::String { contents },
+                            ..
+                        } if contents.as_ref() == key_str => {
+                            // We found a matching string--return it.
+                            return key.clone();
+                        }
+                        // We found an entry, but not a matching one--continue.
+                        _ => (),
+                    },
+                    // We found a tombstone--continue.
+                    Entry::Tombstone => (),
+                }
+
+                index = (index + 1) % capacity;
+            }
+        }
+    }
+
+    fn find_entry_for(&self, key: &Arc<Object>) -> &Entry {
         let entry_idx = self.find_index_for(key);
         &self.entries[entry_idx]
     }
 
-    fn find_entry_for_mut(&mut self, key: &Object) -> &mut Entry {
+    fn find_entry_for_mut(&mut self, key: &Arc<Object>) -> &mut Entry {
         let entry_idx = self.find_index_for(key);
         &mut self.entries[entry_idx]
     }
 
-    fn find_index_for(&self, key: &Object) -> usize {
+    fn find_index_for(&self, key: &Arc<Object>) -> usize {
         let capacity = self.entries.len();
         let mut index = key.hash as usize % capacity;
         let mut tombstone_idx = None;
@@ -108,7 +154,7 @@ impl Table {
                 }
                 Entry::Full {
                     key: current_key, ..
-                } if key == current_key.as_ref() => return index,
+                } if Arc::ptr_eq(key, current_key) => return index,
                 _ => (),
             }
 
@@ -133,7 +179,7 @@ impl Table {
             match &old_entry {
                 // Copy all the full entries to new locations in the expanded table
                 Entry::Full { key, .. } => {
-                    let new_location = self.find_entry_for_mut(key.as_ref());
+                    let new_location = self.find_entry_for_mut(key);
                     *new_location = old_entry;
                     new_count += 1;
                 }
@@ -162,50 +208,30 @@ mod test {
     #[test]
     fn it_overwrites() {
         let mut table = Table::new();
-        assert_eq!(
-            true,
-            table.set(Arc::new(Object::string("abc")), Value::Number(1.0))
-        );
-        assert_eq!(
-            false,
-            table.set(Arc::new(Object::string("abc")), Value::Number(2.0))
-        );
+        let abc = Arc::new(Object::string("abc"));
+        assert_eq!(true, table.set(abc.clone(), Value::Number(1.0)));
+        assert_eq!(false, table.set(abc.clone(), Value::Number(2.0)));
 
-        let current_value = table.get(&Object::string("abc"));
+        let current_value = table.get(&abc);
         assert_eq!(Some(Value::Number(2.0)), current_value);
     }
 
     #[test]
     fn it_deletes() {
         let mut table = Table::new();
+        let abc = Arc::new(Object::string("abc"));
 
         // Table::delete() should return false if the key wasn't in the table
-        assert_eq!(false, table.delete(&Object::string("abc")));
+        assert_eq!(false, table.delete(&abc));
 
         // Table::delete() should return true if the key was in the table
-        table.set(Arc::new(Object::string("abc")), Value::Number(1.0));
-        assert_eq!(true, table.delete(&Object::string("abc")));
+        table.set(abc.clone(), Value::Number(1.0));
+        assert_eq!(true, table.delete(&abc));
 
         // After a delete, the key should no longer be in the table
-        let current_value = table.get(&Object::string("abc"));
+        let current_value = table.get(&abc);
         assert_eq!(None, current_value);
-        assert_eq!(false, table.delete(&Object::string("abc")));
-    }
-
-    #[test]
-    fn it_drops_old_keys_on_overwrite() {
-        let mut table = Table::new();
-        let original_abc = Arc::new(Object::string("abc"));
-        table.set(original_abc.clone(), Value::Number(1.0));
-
-        // The table should hold a strong reference to the key
-        assert_eq!(2, Arc::strong_count(&original_abc));
-
-        table.set(Arc::new(Object::string("abc")), Value::Number(2.0));
-
-        // The table should no longer have a reference to the key
-        // It should hold a new reference to a different object that tests equal to "abc"
-        assert_eq!(1, Arc::strong_count(&original_abc));
+        assert_eq!(false, table.delete(&abc));
     }
 
     #[test]
@@ -217,7 +243,7 @@ mod test {
         // The table should hold a strong reference to the key
         assert_eq!(2, Arc::strong_count(&original_abc));
 
-        assert_eq!(true, table.delete(&Object::string("abc")));
+        assert_eq!(true, table.delete(&original_abc));
 
         assert_eq!(1, Arc::strong_count(&original_abc));
     }
@@ -240,29 +266,66 @@ mod test {
             let key = Arc::new(Object::string(&raw_key));
             let value = Value::Number(n as f64);
             table.set(key.clone(), value.clone());
-            validator.insert(raw_key.clone(), Some(value));
+            validator.insert(raw_key.clone(), (key.clone(), Some(value)));
 
             if n % 3 == 0 {
                 let doubled = Value::Number((n * 2) as f64);
                 table.set(key.clone(), doubled.clone());
-                validator.insert(raw_key.clone(), Some(doubled));
+                validator.insert(raw_key.clone(), (key.clone(), Some(doubled)));
             }
 
             if n % 5 == 0 {
                 let raw_prev_key = format!("test{}", n - 1);
-                let prev_key = Arc::new(Object::string(&raw_prev_key));
-                table.delete(prev_key.as_ref());
-                validator.insert(raw_prev_key.clone(), None);
+                let prev_key = &validator[&raw_prev_key].0;
+                table.delete(prev_key);
+                validator.insert(raw_prev_key.clone(), (prev_key.clone(), None));
             }
         }
 
-        for (raw_key, expected) in validator {
-            let key = Object::string(&raw_key);
-            let actual = table.get(&key);
+        for (raw_key, (expected_key, expected_value)) in validator {
+            let actual_value = table.get(&expected_key);
             assert_eq!(
-                expected, actual,
+                expected_value, actual_value,
                 "expected validator[{raw_key}] == table[{raw_key}]"
             );
         }
+    }
+
+    #[test]
+    fn it_assigns_the_same_address_to_interned_strings() {
+        let mut table = Table::new();
+
+        let abc1 = "abc".to_string();
+        let abc2 = "abc".to_string();
+
+        let abc1_interned = table.intern_string(&abc1);
+        let abc2_interned = table.intern_string(&abc2);
+
+        assert!(
+            Arc::ptr_eq(&abc1_interned, &abc2_interned),
+            "the two pointers should be equal: {:p} vs {:p}",
+            Arc::as_ptr(&abc1_interned),
+            Arc::as_ptr(&abc2_interned)
+        );
+    }
+
+    #[test]
+    fn it_preserves_interned_string_addresses_across_add_all() {
+        let mut table1 = Table::new();
+        let mut table2 = Table::new();
+
+        let abc1 = "abc".to_string();
+        let abc2 = "abc".to_string();
+
+        let abc1_interned = table1.intern_string(&abc1);
+        table2.add_all(&table1);
+        let abc2_interned = table2.intern_string(&abc2);
+
+        assert!(
+            Arc::ptr_eq(&abc1_interned, &abc2_interned),
+            "the two pointers should be equal: {:p} vs {:p}",
+            Arc::as_ptr(&abc1_interned),
+            Arc::as_ptr(&abc2_interned)
+        );
     }
 }

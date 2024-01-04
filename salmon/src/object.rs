@@ -51,9 +51,13 @@ pub enum ObjectType {
 }
 
 pub mod string {
+    use std::sync::Arc;
+
+    use crate::table::Table;
+
     use super::{Object, ObjectType};
 
-    pub fn concatenate(left: &Object, right: &Object) -> Object {
+    pub fn concatenate(left: &Object, right: &Object, strings: &mut Table) -> Arc<Object> {
         match (&left.body, &right.body) {
             (
                 ObjectType::String {
@@ -67,19 +71,13 @@ pub mod string {
                     .chars()
                     .chain(right_contents.chars())
                     .collect::<String>();
-                let hash_value = hash(&contents);
-                Object {
-                    body: ObjectType::String {
-                        contents: contents.into(),
-                    },
-                    hash: hash_value,
-                }
+                strings.intern_string(&contents)
             }
         }
     }
 
     // FNV-1a
-    pub(super) fn hash(key: &str) -> u32 {
+    pub fn hash(key: &str) -> u32 {
         let mut hash = 2166136261u32;
         for b in key.bytes() {
             hash ^= b as u32;

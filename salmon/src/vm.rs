@@ -5,6 +5,7 @@ use crate::{
     chunk::{Chunk, Opcode},
     object,
     scanner::SourceLocation,
+    table::Table,
     value::{DataType, Value},
 };
 
@@ -14,11 +15,13 @@ pub trait VMState {}
 
 pub struct VM<S: VMState> {
     state: S,
+    pub strings: Table,
 }
 
 pub fn new() -> VM<Stopped> {
     VM {
         state: Stopped { result: Ok(()) },
+        strings: Table::new(),
     }
 }
 
@@ -125,10 +128,12 @@ impl<'a> VM<Running<'a>> {
                     if let (Value::Object(right_str), Value::Object(left_str)) =
                         (self.pop()?, self.pop()?)
                     {
-                        self.push(Value::wrap(object::string::concatenate(
+                        let combined_string = object::string::concatenate(
                             left_str.as_ref(),
                             right_str.as_ref(),
-                        )))?;
+                            &mut self.strings,
+                        );
+                        self.push(Value::Object(combined_string))?;
                         Ok(RuntimeAction::Continue)
                     } else {
                         Err(RuntimeError::Bug {
@@ -296,6 +301,7 @@ impl<'a> VM<Running<'a>> {
     fn halt(self, result: Result<()>) -> VM<Stopped> {
         VM {
             state: Stopped { result },
+            strings: self.strings,
         }
     }
 }
@@ -312,16 +318,20 @@ pub struct Stopped {
 impl VMState for Stopped {}
 
 impl VM<Stopped> {
-    pub fn interpret(self, chunk: &Chunk) -> VM<Stopped> {
+    pub fn interpret(mut self, chunk: &Chunk) -> VM<Stopped> {
+        self.strings.add_all(&chunk.strings);
         let running = VM {
             state: Running::new(chunk),
+            strings: self.strings,
         };
         running.run()
     }
 
-    pub fn trace<T: tracing::Tracer>(self, chunk: &Chunk, tracer: &mut T) -> VM<Stopped> {
+    pub fn trace<T: tracing::Tracer>(mut self, chunk: &Chunk, tracer: &mut T) -> VM<Stopped> {
+        self.strings.add_all(&chunk.strings);
         let running = VM {
             state: Running::new(chunk),
+            strings: self.strings,
         };
         running.trace(tracer)
     }

@@ -78,6 +78,7 @@ impl PartialEq for Value {
         match (self, other) {
             (Self::Number(l0), Self::Number(r0)) => l0 == r0,
             (Self::Boolean(l0), Self::Boolean(r0)) => l0 == r0,
+            (Self::Object(l0), Self::Object(r0)) => Arc::ptr_eq(&l0, &r0),
             (Self::Nil, Self::Nil) => true,
             _ => false,
         }
