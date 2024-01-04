@@ -62,6 +62,7 @@ fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -
         Opcode::Print => render_simple_instruction("Print", offset, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
+        Opcode::GetGlobal => render_constant("Get Global", offset, chunk, line),
         Opcode::DefineGlobal => render_constant("Define Global", offset, chunk, line),
         Opcode::Equal => render_simple_instruction("Equal", offset, line),
         Opcode::Greater => render_simple_instruction("Greater", offset, line),

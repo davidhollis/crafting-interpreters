@@ -90,13 +90,38 @@ impl<'a> VM<Running<'a>> {
     fn execute_instruction(&mut self, op: Opcode) -> Result<RuntimeAction> {
         match op {
             Opcode::Print => {
-                println!("{}", self.pop()?.show());
+                println!("{}", self.pop()?.print());
                 Ok(RuntimeAction::Continue)
             }
             Opcode::Return => Ok(RuntimeAction::Halt),
             Opcode::Pop => {
                 let _ = self.pop()?;
                 Ok(RuntimeAction::Continue)
+            }
+            Opcode::GetGlobal => {
+                let name_idx = self.next_byte()?;
+                let global_name = self.state.chunk.constant_at(name_idx)?;
+                if let Value::Object(name_ref) = global_name {
+                    if let Some(value) = self.globals.get(name_ref) {
+                        self.push(value)?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        let location = self.previous_opcode_location()?;
+                        Err(RuntimeError::UndefinedVariable {
+                            name: global_name.print(),
+                            span: location.span,
+                            line: location.line,
+                        }
+                        .into())
+                    }
+                } else {
+                    Err(RuntimeError::Bug {
+                        message:
+                            "GetGlobal instruction somehow points at something other than a string",
+                        span: self.previous_opcode_location()?.span,
+                    }
+                    .into())
+                }
             }
             Opcode::DefineGlobal => {
                 let name_idx = self.next_byte()?;
@@ -106,7 +131,12 @@ impl<'a> VM<Running<'a>> {
                     self.pop()?;
                     Ok(RuntimeAction::Continue)
                 } else {
-                    Err(RuntimeError::Bug { message: "DefineGlobal instruction somehow points at something other than a string", span: self.previous_opcode_location()?.span }.into())
+                    Err(RuntimeError::Bug {
+                        message:
+                            "DefineGlobal instruction somehow points at something other than a string",
+                        span: self.previous_opcode_location()?.span,
+                    }
+                    .into())
                 }
             }
             Opcode::Equal => {
@@ -406,6 +436,17 @@ pub enum RuntimeError {
     StackOverflow {
         #[label("occurred here")]
         span: (usize, usize),
+    },
+    #[error("undefined variable '{name}' on line {line}")]
+    #[diagnostic(
+        code(runtime::undefined_variable),
+        help("variables must be declared before use")
+    )]
+    UndefinedVariable {
+        name: String,
+        #[label("referenced here")]
+        span: (usize, usize),
+        line: usize,
     },
     #[error("bug in VM: {message}")]
     #[diagnostic(code(runtime::internal::bug))]

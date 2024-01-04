@@ -37,6 +37,16 @@ impl Value {
         }
     }
 
+    pub fn print(&self) -> String {
+        match self {
+            Value::Number(n) => format!("{}", n),
+            Value::Boolean(true) => "true".to_string(),
+            Value::Boolean(false) => "false".to_string(),
+            Value::Object(obj) => obj.print(),
+            Value::Nil => "nil".to_string(),
+        }
+    }
+
     pub fn is_falsy(&self) -> bool {
         match self {
             // false and nil are falsy

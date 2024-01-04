@@ -22,6 +22,12 @@ impl Object {
             ObjectType::String { contents } => format!(r#""{}""#, contents),
         }
     }
+
+    pub fn print(&self) -> String {
+        match &self.body {
+            ObjectType::String { contents } => contents.to_string(),
+        }
+    }
 }
 
 impl Debug for Object {

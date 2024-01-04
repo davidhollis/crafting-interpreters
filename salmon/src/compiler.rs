@@ -267,6 +267,11 @@ fn string(parser: &mut Parser) -> Result<()> {
     Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
 }
 
+fn variable(parser: &mut Parser) -> Result<()> {
+    let name_id = variable_name(parser)?;
+    Ok(parser.emit_bytes(&[Opcode::GetGlobal as u8, name_id]))
+}
+
 fn variable_name(parser: &mut Parser) -> Result<u8> {
     let identifier_name = parser.chunk.strings.intern_string(&parser.previous.lexeme);
     parser.make_constant(Value::Object(identifier_name))
@@ -447,7 +452,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::LessEqual
     ParseRule { prefix: None, infix: Some(binary_op), precedence: Precedence::Equality },
     // TokenType::Identifier
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(variable), infix: None, precedence: Precedence::None },
     // TokenType::String
     ParseRule { prefix: Some(string), infix: None, precedence: Precedence::None },
     // TokenType::Number
