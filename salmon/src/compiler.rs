@@ -182,7 +182,32 @@ impl<'a> Parser<'a> {
 }
 
 fn declaration(parser: &mut Parser) -> Result<()> {
-    statement(parser)
+    if parser.match_token(TokenType::Var) {
+        var_declaration(parser)
+    } else {
+        statement(parser)
+    }
+}
+
+fn var_declaration(parser: &mut Parser) -> Result<()> {
+    let var_location = parser.previous.location();
+    parser.consume(TokenType::Identifier, "expected identifier after 'var'")?;
+    let name_location = parser.previous.location();
+    let global_id = variable_name(parser)?;
+
+    if parser.match_token(TokenType::Equal) {
+        expression(parser)?;
+    } else {
+        parser.emit_byte_at(Opcode::Nil as u8, var_location);
+    }
+
+    parser.consume(
+        TokenType::Semicolon,
+        "expected a semicolon at the end of a var declaration",
+    )?;
+
+    parser.emit_bytes_at(&[Opcode::DefineGlobal as u8, global_id], name_location);
+    Ok(())
 }
 
 fn statement(parser: &mut Parser) -> Result<()> {
@@ -240,6 +265,11 @@ fn string(parser: &mut Parser) -> Result<()> {
         .intern_string(&parser.previous.lexeme[1..(parser.previous.lexeme.len() - 1)]);
     let const_id = parser.make_constant(Value::Object(string_literal))?;
     Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
+}
+
+fn variable_name(parser: &mut Parser) -> Result<u8> {
+    let identifier_name = parser.chunk.strings.intern_string(&parser.previous.lexeme);
+    parser.make_constant(Value::Object(identifier_name))
 }
 
 fn grouping(parser: &mut Parser) -> Result<()> {

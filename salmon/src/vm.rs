@@ -16,12 +16,14 @@ pub trait VMState {}
 pub struct VM<S: VMState> {
     state: S,
     pub strings: Table,
+    globals: Table,
 }
 
 pub fn new() -> VM<Stopped> {
     VM {
         state: Stopped { result: Ok(()) },
         strings: Table::new(),
+        globals: Table::new(),
     }
 }
 
@@ -95,6 +97,17 @@ impl<'a> VM<Running<'a>> {
             Opcode::Pop => {
                 let _ = self.pop()?;
                 Ok(RuntimeAction::Continue)
+            }
+            Opcode::DefineGlobal => {
+                let name_idx = self.next_byte()?;
+                let global_name = self.state.chunk.constant_at(name_idx)?;
+                if let Value::Object(name_ref) = global_name {
+                    let _ = self.globals.set(name_ref.clone(), self.peek(0));
+                    self.pop()?;
+                    Ok(RuntimeAction::Continue)
+                } else {
+                    Err(RuntimeError::Bug { message: "DefineGlobal instruction somehow points at something other than a string", span: self.previous_opcode_location()?.span }.into())
+                }
             }
             Opcode::Equal => {
                 let right = self.pop()?;
@@ -307,6 +320,7 @@ impl<'a> VM<Running<'a>> {
         VM {
             state: Stopped { result },
             strings: self.strings,
+            globals: self.globals,
         }
     }
 }
@@ -328,6 +342,7 @@ impl VM<Stopped> {
         let running = VM {
             state: Running::new(chunk),
             strings: self.strings,
+            globals: self.globals,
         };
         running.run()
     }
@@ -337,6 +352,7 @@ impl VM<Stopped> {
         let running = VM {
             state: Running::new(chunk),
             strings: self.strings,
+            globals: self.globals,
         };
         running.trace(tracer)
     }
