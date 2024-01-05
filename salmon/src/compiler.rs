@@ -243,7 +243,7 @@ fn expression(parser: &mut Parser) -> Result<()> {
     parse_precedence(parser, Precedence::Assignment)
 }
 
-fn number(parser: &mut Parser) -> Result<()> {
+fn number(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     match parser.previous.lexeme.parse() {
         Ok(num) => {
             let const_id = parser.make_constant(Value::Number(num))?;
@@ -258,7 +258,7 @@ fn number(parser: &mut Parser) -> Result<()> {
     }
 }
 
-fn string(parser: &mut Parser) -> Result<()> {
+fn string(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     let string_literal = parser
         .chunk
         .strings
@@ -267,9 +267,16 @@ fn string(parser: &mut Parser) -> Result<()> {
     Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
 }
 
-fn variable(parser: &mut Parser) -> Result<()> {
+fn variable(parser: &mut Parser, can_assign: bool) -> Result<()> {
     let name_id = variable_name(parser)?;
-    Ok(parser.emit_bytes(&[Opcode::GetGlobal as u8, name_id]))
+
+    if can_assign && parser.match_token(TokenType::Equal) {
+        let equal_location = parser.previous.location();
+        expression(parser)?;
+        Ok(parser.emit_bytes_at(&[Opcode::SetGlobal as u8, name_id], equal_location))
+    } else {
+        Ok(parser.emit_bytes(&[Opcode::GetGlobal as u8, name_id]))
+    }
 }
 
 fn variable_name(parser: &mut Parser) -> Result<u8> {
@@ -277,7 +284,7 @@ fn variable_name(parser: &mut Parser) -> Result<u8> {
     parser.make_constant(Value::Object(identifier_name))
 }
 
-fn grouping(parser: &mut Parser) -> Result<()> {
+fn grouping(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     expression(parser)?;
     parser.consume(
         TokenType::RightParen,
@@ -286,7 +293,7 @@ fn grouping(parser: &mut Parser) -> Result<()> {
     Ok(())
 }
 
-fn unary_op(parser: &mut Parser) -> Result<()> {
+fn unary_op(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     let operator_type = parser.previous.tpe;
     let operator_location = parser.previous.location();
 
@@ -299,7 +306,7 @@ fn unary_op(parser: &mut Parser) -> Result<()> {
     }
 }
 
-fn binary_op(parser: &mut Parser) -> Result<()> {
+fn binary_op(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     let operator_type = parser.previous.tpe;
     let operator_location = parser.previous.location();
     let rule = ParseRule::rule_for(operator_type);
@@ -329,7 +336,7 @@ fn binary_op(parser: &mut Parser) -> Result<()> {
     }
 }
 
-fn literal(parser: &mut Parser) -> Result<()> {
+fn literal(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     match parser.previous.tpe {
         TokenType::True => Ok(parser.emit_byte(Opcode::True as u8)),
         TokenType::False => Ok(parser.emit_byte(Opcode::False as u8)),
@@ -339,19 +346,30 @@ fn literal(parser: &mut Parser) -> Result<()> {
 }
 
 fn parse_precedence(parser: &mut Parser, precedence: Precedence) -> Result<()> {
+    let can_assign = precedence <= Precedence::Assignment;
+
     parser.advance();
 
     match ParseRule::rule_for(parser.previous.tpe).prefix {
-        Some(prefix_action) => prefix_action(parser)?,
+        Some(prefix_action) => prefix_action(parser, can_assign)?,
         None => return Err(ParseError::vanilla_unexpected(&parser.previous).into()),
     }
 
     while precedence <= ParseRule::rule_for(parser.current.tpe).precedence {
         parser.advance();
         match ParseRule::rule_for(parser.previous.tpe).infix {
-            Some(infix_action) => infix_action(parser)?,
+            Some(infix_action) => infix_action(parser, can_assign)?,
             None => return Err(ParseError::vanilla_unexpected(&parser.previous).into()),
         }
+    }
+
+    if can_assign && parser.match_token(TokenType::Equal) {
+        let equal_location = parser.previous.location();
+        return Err(ParseError::InvalidAssignmentTarget {
+            equal_token_span: equal_location.span,
+            line: equal_location.line,
+        }
+        .into());
     }
 
     Ok(())
@@ -397,7 +415,7 @@ impl From<usize> for Precedence {
     }
 }
 
-type Action = fn(&mut Parser) -> Result<()>;
+type Action = fn(&mut Parser, bool) -> Result<()>;
 
 struct ParseRule {
     prefix: Option<Action>,
@@ -519,6 +537,16 @@ pub enum ParseError {
     TooManyConstants {
         #[label("the 256th constant")]
         token_span: (usize, usize),
+    },
+    #[error("invalid assignment target on line {line}")]
+    #[diagnostic(
+        code(compiler::invalid_assignment_target),
+        help("The expression to the left of this '=' cannot be assigned to. Only object fields and variables can be assigned to.")
+    )]
+    InvalidAssignmentTarget {
+        #[label("this assignment expression")]
+        equal_token_span: (usize, usize),
+        line: usize,
     },
     #[error("failed to produce bytecode due to the following error(s)")]
     #[diagnostic(code(compiler::no_bytecode))]

@@ -139,6 +139,35 @@ impl<'a> VM<Running<'a>> {
                     .into())
                 }
             }
+            Opcode::SetGlobal => {
+                let name_idx = self.next_byte()?;
+                let global_name = self.state.chunk.constant_at(name_idx)?;
+                if let Value::Object(name_ref) = global_name {
+                    if self.globals.set(name_ref.clone(), self.peek(0)) {
+                        // If we inserted a new value, then the variable wasn't declared, so we
+                        // take it back out and return an error
+                        self.globals.delete(name_ref);
+
+                        let location = self.previous_opcode_location()?;
+                        Err(RuntimeError::UndefinedVariable {
+                            name: name_ref.print(),
+                            span: location.span,
+                            line: location.line,
+                        }
+                        .into())
+                    } else {
+                        // If we overwrote an existing value, all's well
+                        Ok(RuntimeAction::Continue)
+                    }
+                } else {
+                    Err(RuntimeError::Bug {
+                        message:
+                            "SetGlobal instruction somehow points at something other than a string",
+                        span: self.previous_opcode_location()?.span,
+                    }
+                    .into())
+                }
+            }
             Opcode::Equal => {
                 let right = self.pop()?;
                 let left = self.pop()?;
