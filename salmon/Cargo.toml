@@ -12,6 +12,7 @@ miette = { version = "5.10.0", features = ["fancy"] }
 rustyline = "13.0.0"
 termcolor = "1.4.0"
 thiserror = "1.0.51"
+from_u8 = { path = "./from_u8" }
 
 
 # Build Targets
@@ -29,3 +30,6 @@ name = "disassembler"
 
 [[example]]
 name = "tracing"
+
+[workspace]
+members = ["from_u8"]

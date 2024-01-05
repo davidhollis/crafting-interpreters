@@ -1,10 +1,12 @@
+use from_u8::FromU8;
 use miette::{Diagnostic, ErrReport, Result};
 use thiserror::Error;
 
 use crate::{scanner::SourceLocation, table::Table, value::Value};
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, FromU8)]
+#[from_u8(err_type(ErrReport), err_constructor(DecodeError::NoSuchInstruction))]
 pub enum Opcode {
     Constant,
     Nil,
@@ -25,35 +27,6 @@ pub enum Opcode {
     Negate,
     Print,
     Return,
-}
-
-impl TryFrom<u8> for Opcode {
-    type Error = ErrReport;
-
-    fn try_from(byte: u8) -> Result<Self, Self::Error> {
-        match byte {
-            x if x == Opcode::Constant as u8 => Ok(Opcode::Constant),
-            x if x == Opcode::Nil as u8 => Ok(Opcode::Nil),
-            x if x == Opcode::True as u8 => Ok(Opcode::True),
-            x if x == Opcode::False as u8 => Ok(Opcode::False),
-            x if x == Opcode::Pop as u8 => Ok(Opcode::Pop),
-            x if x == Opcode::GetGlobal as u8 => Ok(Opcode::GetGlobal),
-            x if x == Opcode::DefineGlobal as u8 => Ok(Opcode::DefineGlobal),
-            x if x == Opcode::SetGlobal as u8 => Ok(Opcode::SetGlobal),
-            x if x == Opcode::Equal as u8 => Ok(Opcode::Equal),
-            x if x == Opcode::Greater as u8 => Ok(Opcode::Greater),
-            x if x == Opcode::Less as u8 => Ok(Opcode::Less),
-            x if x == Opcode::Add as u8 => Ok(Opcode::Add),
-            x if x == Opcode::Subtract as u8 => Ok(Opcode::Subtract),
-            x if x == Opcode::Multiply as u8 => Ok(Opcode::Multiply),
-            x if x == Opcode::Divide as u8 => Ok(Opcode::Divide),
-            x if x == Opcode::Not as u8 => Ok(Opcode::Not),
-            x if x == Opcode::Negate as u8 => Ok(Opcode::Negate),
-            x if x == Opcode::Return as u8 => Ok(Opcode::Return),
-            x if x == Opcode::Print as u8 => Ok(Opcode::Print),
-            _ => Err(DecodeError::NoSuchInstruction(byte).into()),
-        }
-    }
 }
 
 #[derive(Error, Debug, Diagnostic)]
