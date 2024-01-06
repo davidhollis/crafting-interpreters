@@ -9,7 +9,7 @@ use crate::{
     value::{DataType, Value},
 };
 
-const STACK_SIZE: usize = 255;
+pub(crate) const STACK_SIZE: usize = 255;
 
 pub trait VMState {}
 
@@ -96,6 +96,18 @@ impl<'a> VM<Running<'a>> {
             Opcode::Return => Ok(RuntimeAction::Halt),
             Opcode::Pop => {
                 let _ = self.pop()?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::GetLocal => {
+                let stack_idx = self.next_byte()?;
+                let value = self.state.stack[stack_idx as usize].clone();
+                self.push(value)?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::SetLocal => {
+                let stack_idx = self.next_byte()?;
+                let new_value = self.peek(0);
+                self.state.stack[stack_idx as usize] = new_value;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::GetGlobal => {

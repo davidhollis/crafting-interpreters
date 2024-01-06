@@ -95,6 +95,7 @@ impl TokenType {
     }
 }
 
+#[derive(Clone)]
 pub struct Token<'a> {
     pub tpe: TokenType,
     pub lexeme: &'a str,
@@ -212,7 +213,7 @@ impl<'a> Scanner<'a> {
                 }
                 '"' => self.scan_string(),
                 c if c.is_ascii_digit() => self.scan_number(),
-                c if c.is_ascii_alphabetic() => self.scan_identifier(),
+                c if c.is_ascii_alphabetic() || c == '_' => self.scan_identifier(),
                 c => Err(ScannerError::UnexpectedCharacter {
                     character: c,
                     offset,
@@ -298,7 +299,7 @@ impl<'a> Scanner<'a> {
 
         while let Some((offset, _)) = self
             .current_character
-            .next_if(|(_, nc)| nc.is_ascii_alphanumeric())
+            .next_if(|(_, nc)| nc.is_ascii_alphanumeric() || *nc == '_')
         {
             last_char_offset = offset;
         }

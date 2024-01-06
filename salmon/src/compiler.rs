@@ -6,6 +6,7 @@ use crate::{
     scanner::{Scanner, SourceLocation, Token, TokenType},
     table::Table,
     value::Value,
+    vm,
 };
 
 pub fn compile(source_code: &str) -> Result<Chunk> {
@@ -27,11 +28,18 @@ pub fn compile_repl(source_code: &str, line: usize, vm_strings: &Table) -> Resul
     parser.finalize()
 }
 
+struct LocalVariable<'a> {
+    name: Token<'a>,
+    depth: Option<u8>,
+}
+
 struct Parser<'a> {
     scanner: Scanner<'a>,
     previous: Token<'a>,
     current: Token<'a>,
     chunk: Chunk,
+    locals: Vec<LocalVariable<'a>>,
+    scope_depth: u8,
     errors: Vec<ParseError>,
     panic_mode: bool,
 }
@@ -43,6 +51,8 @@ impl<'a> Parser<'a> {
             previous: Token::empty(),
             current: Token::empty(),
             chunk,
+            locals: vec![],
+            scope_depth: 0,
             errors: vec![],
             panic_mode: false,
         }
@@ -98,6 +108,10 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    fn check_token(&self, token_type: TokenType) -> bool {
+        self.current.tpe == token_type
     }
 
     fn finalize(self) -> Result<Chunk> {
@@ -179,7 +193,55 @@ impl<'a> Parser<'a> {
             Ok(const_id as u8)
         }
     }
+
+    fn identifier_constant(&mut self, name_token: &Token) -> Result<u8> {
+        let identifier_name = self.chunk.strings.intern_string(&name_token.lexeme);
+        self.make_constant(Value::Object(identifier_name))
+    }
+
+    fn begin_scope(&mut self) -> () {
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) -> () {
+        self.scope_depth -= 1;
+
+        // Clear out the locals from this scope
+        while let Some(local) = self.locals.last() {
+            if local.depth.unwrap_or(u8::MAX) <= self.scope_depth {
+                // Once we hit a local that isn't from an inner scope, stop popping
+                break;
+            }
+
+            self.emit_byte(Opcode::Pop as u8);
+            let _ = self.locals.pop();
+        }
+    }
+
+    fn add_local_variable(&mut self, name_token: Token<'a>) -> Result<()> {
+        if self.locals.len() == vm::STACK_SIZE {
+            return Err(ParseError::TooManyLocalVariables {
+                token_span: self.previous.error_span(),
+            }
+            .into());
+        }
+        self.locals.push(LocalVariable {
+            name: name_token,
+            depth: None,
+        });
+        Ok(())
+    }
+
+    fn mark_last_initialized(&mut self) -> () {
+        if let Some(last_local) = self.locals.last_mut() {
+            last_local.depth = Some(self.scope_depth);
+        }
+    }
 }
+
+// TODO(hollis): I'm not happy with the organization of this module
+//               Some of these need to be separate functions so they can be included in the table,
+//               but others could very realistically be associated functions on Parser
 
 fn declaration(parser: &mut Parser) -> Result<()> {
     if parser.match_token(TokenType::Var) {
@@ -191,9 +253,8 @@ fn declaration(parser: &mut Parser) -> Result<()> {
 
 fn var_declaration(parser: &mut Parser) -> Result<()> {
     let var_location = parser.previous.location();
-    parser.consume(TokenType::Identifier, "expected identifier after 'var'")?;
+    let global_id = consume_variable_name(parser)?;
     let name_location = parser.previous.location();
-    let global_id = variable_name(parser)?;
 
     if parser.match_token(TokenType::Equal) {
         expression(parser)?;
@@ -206,13 +267,72 @@ fn var_declaration(parser: &mut Parser) -> Result<()> {
         "expected a semicolon at the end of a var declaration",
     )?;
 
-    parser.emit_bytes_at(&[Opcode::DefineGlobal as u8, global_id], name_location);
+    if parser.scope_depth == 0 {
+        // If we're in the global scope, emit an instruction to define a global with the value on
+        // top of the stack.
+        define_global_variable(parser, global_id, name_location);
+    } else {
+        // If we're not in the global scope, mark the local we just declared as initialized
+        parser.mark_last_initialized();
+    }
+
     Ok(())
+}
+
+fn consume_variable_name(parser: &mut Parser) -> Result<u8> {
+    parser.consume(TokenType::Identifier, "expected identifier after 'var'")?;
+    let name_token = parser.previous.clone();
+
+    if parser.scope_depth > 0 {
+        declare_local_variable(parser, name_token)?;
+        Ok(0)
+    } else {
+        parser.identifier_constant(&name_token)
+    }
+}
+
+fn declare_local_variable<'a>(parser: &mut Parser<'a>, name_token: Token<'a>) -> Result<()> {
+    // Scan for existing bindings in the same scope
+    for existing_local in parser.locals.iter().rev() {
+        match existing_local.depth {
+            Some(d) if d < parser.scope_depth => {
+                // Bindings are strictly ordered, so if we find a binding from an outer scope,
+                // we can stop scanning.
+                break;
+            }
+            _ => (),
+        }
+
+        if name_token.lexeme == existing_local.name.lexeme {
+            return Err(ParseError::InvalidRedeclaration {
+                name: name_token.lexeme.to_string(),
+                duplicate_decl_span: name_token.error_span(),
+                original_decl_span: existing_local.name.error_span(),
+                line: name_token.line,
+            }
+            .into());
+        }
+    }
+
+    parser.add_local_variable(name_token)
+}
+
+fn define_global_variable(
+    parser: &mut Parser,
+    global_id: u8,
+    source_location: SourceLocation,
+) -> () {
+    parser.emit_bytes_at(&[Opcode::DefineGlobal as u8, global_id], source_location);
 }
 
 fn statement(parser: &mut Parser) -> Result<()> {
     if parser.match_token(TokenType::Print) {
         print_statement(parser)
+    } else if parser.match_token(TokenType::LeftBrace) {
+        parser.begin_scope();
+        block_statement(parser)?;
+        parser.end_scope();
+        Ok(())
     } else {
         expression_statement(parser)
     }
@@ -227,6 +347,14 @@ fn print_statement(parser: &mut Parser) -> Result<()> {
     )?;
     parser.emit_byte_at(Opcode::Print as u8, print_location);
     Ok(())
+}
+
+fn block_statement(parser: &mut Parser) -> Result<()> {
+    while !parser.check_token(TokenType::RightBrace) && !parser.check_token(TokenType::EOF) {
+        declaration(parser)?;
+    }
+
+    parser.consume(TokenType::RightBrace, "expected '}' at the end of a block")
 }
 
 fn expression_statement(parser: &mut Parser) -> Result<()> {
@@ -268,20 +396,49 @@ fn string(parser: &mut Parser, _can_assign: bool) -> Result<()> {
 }
 
 fn variable(parser: &mut Parser, can_assign: bool) -> Result<()> {
-    let name_id = variable_name(parser)?;
+    resolve_variable_expression(parser, can_assign)
+}
+
+fn resolve_variable_expression(parser: &mut Parser, can_assign: bool) -> Result<()> {
+    let name_token = parser.previous.clone();
+
+    let (get_op, set_op, idx) = match resolve_local(parser, &name_token)? {
+        Some(stack_index) => (Opcode::GetLocal as u8, Opcode::SetLocal as u8, stack_index),
+        None => (
+            Opcode::GetGlobal as u8,
+            Opcode::SetGlobal as u8,
+            parser.identifier_constant(&name_token)?,
+        ),
+    };
 
     if can_assign && parser.match_token(TokenType::Equal) {
         let equal_location = parser.previous.location();
         expression(parser)?;
-        Ok(parser.emit_bytes_at(&[Opcode::SetGlobal as u8, name_id], equal_location))
+        Ok(parser.emit_bytes_at(&[set_op, idx], equal_location))
     } else {
-        Ok(parser.emit_bytes(&[Opcode::GetGlobal as u8, name_id]))
+        Ok(parser.emit_bytes(&[get_op, idx]))
     }
 }
 
-fn variable_name(parser: &mut Parser) -> Result<u8> {
-    let identifier_name = parser.chunk.strings.intern_string(&parser.previous.lexeme);
-    parser.make_constant(Value::Object(identifier_name))
+fn resolve_local(parser: &Parser, name_token: &Token) -> Result<Option<u8>> {
+    for (stack_idx, local) in parser.locals.iter().enumerate().rev() {
+        if local.name.lexeme == name_token.lexeme {
+            // Found a local binding for this variable
+            if local.depth.is_none() {
+                return Err(ParseError::UninitializedRead {
+                    name: name_token.lexeme.to_string(),
+                    bad_use_span: name_token.error_span(),
+                    line: name_token.line,
+                }
+                .into());
+            } else {
+                return Ok(Some(stack_idx as u8));
+            }
+        }
+    }
+
+    // We didn't find a local binding, so the variable must be a global
+    Ok(None)
 }
 
 fn grouping(parser: &mut Parser, _can_assign: bool) -> Result<()> {
@@ -538,6 +695,12 @@ pub enum ParseError {
         #[label("the 256th constant")]
         token_span: (usize, usize),
     },
+    #[error("too many local variables in one compilation unit")]
+    #[diagnostic(code(compiler::too_many_locals), help("this is a compiler limitation"))]
+    TooManyLocalVariables {
+        #[label("last variable defined here")]
+        token_span: (usize, usize),
+    },
     #[error("invalid assignment target on line {line}")]
     #[diagnostic(
         code(compiler::invalid_assignment_target),
@@ -546,6 +709,30 @@ pub enum ParseError {
     InvalidAssignmentTarget {
         #[label("this assignment expression")]
         equal_token_span: (usize, usize),
+        line: usize,
+    },
+    #[error("attempted to redeclare variable '{name}' on line {line}")]
+    #[diagnostic(
+        code(compiler::invalid_redeclaration),
+        help("Variables cannot be redeclared in the same scope. If you want to reassign {name}, try removing the 'var' from the second assignment.")
+    )]
+    InvalidRedeclaration {
+        name: String,
+        #[label("attempt to redeclare here")]
+        duplicate_decl_span: (usize, usize),
+        #[label("original declaration here")]
+        original_decl_span: (usize, usize),
+        line: usize,
+    },
+    #[error("attempted to use variable '{name}' in its own initializer")]
+    #[diagnostic(
+        code(compiler::uninitialized_read),
+        help("If you're intentionally trying to shadow another variable, consider explicitly doing something like `var _{name} = {name}; var {name} = _{name};`")
+    )]
+    UninitializedRead {
+        name: String,
+        #[label("here")]
+        bad_use_span: (usize, usize),
         line: usize,
     },
     #[error("failed to produce bytecode due to the following error(s)")]

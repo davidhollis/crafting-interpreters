@@ -62,6 +62,8 @@ fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -
         Opcode::Print => render_simple_instruction("Print", offset, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
+        Opcode::GetLocal => render_local_var_instruction("Get Local", offset, chunk, line),
+        Opcode::SetLocal => render_local_var_instruction("Set Local", offset, chunk, line),
         Opcode::GetGlobal => render_constant("Get Global", offset, chunk, line),
         Opcode::DefineGlobal => render_constant("Define Global", offset, chunk, line),
         Opcode::SetGlobal => render_constant("Set Global", offset, chunk, line),
@@ -101,6 +103,24 @@ fn render_constant(
     write!(line, " 0x{:02x} ", const_idx).into_diagnostic()?;
     color(line, Color::Blue)?;
     writeln!(line, "({})", chunk.constant_at(const_idx)?.show()).into_diagnostic()?;
+
+    Ok(offset + 2)
+}
+
+fn render_local_var_instruction(
+    instr_name: &str,
+    offset: usize,
+    chunk: &Chunk,
+    line: &mut Buffer,
+) -> Result<usize> {
+    color(line, Color::Green)?;
+    write!(line, "{:-16}", instr_name).into_diagnostic()?;
+
+    let stack_idx = *chunk.byte(offset + 1)?;
+    color(line, Color::White)?;
+    writeln!(line, " 0x{:02x} ", stack_idx).into_diagnostic()?;
+
+    // TODO(hollis): find a way to represent debugging symbols so we can include a local variable name here
 
     Ok(offset + 2)
 }

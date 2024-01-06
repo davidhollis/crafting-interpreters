@@ -26,8 +26,6 @@ struct Salmon {
 fn main() -> Result<()> {
     let opts = Salmon::parse();
 
-    println!("Welcome to Salmon v{}.", VERSION);
-
     match &opts.script_path {
         Some(path) => run_file(path, &opts),
         None => run_repl(&opts),
@@ -56,6 +54,8 @@ fn run_file(path: &PathBuf, opts: &Salmon) -> Result<()> {
 }
 
 fn run_repl(opts: &Salmon) -> Result<()> {
+    println!("Welcome to Salmon v{}.", VERSION);
+
     let mut rl = rustyline::DefaultEditor::new().into_diagnostic()?;
     let mut vm = salmon::vm::new();
     let mut line_number: usize = 1;
