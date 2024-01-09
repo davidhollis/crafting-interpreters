@@ -377,6 +377,8 @@ fn statement(parser: &mut Parser) -> Result<()> {
         if_statement(parser)
     } else if parser.match_token(TokenType::While) {
         while_statement(parser)
+    } else if parser.match_token(TokenType::For) {
+        for_statement(parser)
     } else if parser.match_token(TokenType::LeftBrace) {
         parser.begin_scope();
         block_statement(parser)?;
@@ -439,6 +441,75 @@ fn while_statement(parser: &mut Parser) -> Result<()> {
     parser.emit_loop(loop_start_mark)?;
     parser.patch_jump(done_jump_offset)?;
     Ok(parser.emit_byte_at(Opcode::Pop as u8, rparen_location))
+}
+
+fn for_statement(parser: &mut Parser) -> Result<()> {
+    let for_location = parser.previous.location();
+
+    parser.begin_scope();
+
+    // == Initializer expression ==
+    parser.consume(TokenType::LeftParen, "expected a '(' after 'for'")?;
+    if parser.match_token(TokenType::Semicolon) {
+        // Empty initializer expression. Emit no bytecode.
+    } else if parser.match_token(TokenType::Var) {
+        // Bind a local variable in the initializer.
+        var_declaration(parser)?;
+    } else {
+        // Just execute an expression, pop, and consume the ;
+        expression_statement(parser)?;
+    }
+
+    // == Condition expression ==
+    let (loop_start_addr, _) = parser.mark();
+    let loop_start_mark = (loop_start_addr, for_location.clone());
+    let done_jump_offset = if parser.match_token(TokenType::Semicolon) {
+        // No condition expression, so we don't emit a conditional jump
+        None
+    } else {
+        expression(parser)?;
+        parser.consume(
+            TokenType::Semicolon,
+            "expected a ';' after a for loop's condition expression",
+        )?;
+        let offset = parser.emit_jump(Opcode::JumpIfFalse, for_location.clone());
+        parser.emit_byte_at(Opcode::Pop as u8, for_location.clone());
+        Some(offset)
+    };
+
+    // == Increment expression ==
+    let increment_start_mark = if parser.match_token(TokenType::RightParen) {
+        // No increment expression, so the end of the body will just jump straight to the head of the loop
+        None
+    } else {
+        // We have an increment expression, so:
+
+        // 1. If the condition is true, we jump over this segment and into the body
+        let body_jump_offset = parser.emit_jump(Opcode::Jump, parser.previous.location());
+        // 2. At the end of the body, we jump here (the head of the increment)
+        let increment_start = parser.mark();
+        expression(parser)?;
+        parser.consume(
+            TokenType::RightParen,
+            "expected a ')' after a for loop's increment expression",
+        )?;
+        parser.emit_byte(Opcode::Pop as u8);
+        // 3. After the increment expression has run, we unconditionally jump back to the head of the condition
+        parser.emit_loop(loop_start_mark.clone())?;
+        parser.patch_jump(body_jump_offset)?;
+        Some(increment_start)
+    };
+
+    // == Loop body ==
+    statement(parser)?;
+    parser.emit_loop(increment_start_mark.unwrap_or(loop_start_mark))?;
+
+    // == Post-loop cleanup ==
+    if let Some(done_jump_offset) = done_jump_offset {
+        parser.patch_jump(done_jump_offset)?;
+        parser.emit_byte_at(Opcode::Pop as u8, for_location)
+    }
+    Ok(parser.end_scope())
 }
 
 fn block_statement(parser: &mut Parser) -> Result<()> {
