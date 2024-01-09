@@ -148,7 +148,7 @@ impl<'a> Parser<'a> {
     }
 
     fn patch_jump(&mut self, jump_arg_offset: usize) -> Result<()> {
-        // jump distance = (current chunk length) - (address of first jump argument byte) - (size of jump argument)
+        // forwards jump distance = (current chunk length) - (address of first jump argument byte) - (size of jump argument)
         let jump_distance = self.chunk.len() - jump_arg_offset - 2;
 
         if jump_distance > u16::MAX as usize {
@@ -162,6 +162,29 @@ impl<'a> Parser<'a> {
             .patch(jump_arg_offset, ((jump_distance >> 8) & 0xFF) as u8)?; // most significant 8 bits
         self.chunk
             .patch(jump_arg_offset + 1, (jump_distance & 0xFF) as u8) // least significant 8 bits
+    }
+
+    fn mark(&self) -> (usize, SourceLocation) {
+        (self.chunk.len(), self.previous.location())
+    }
+
+    fn emit_loop(&mut self, mark: (usize, SourceLocation)) -> Result<()> {
+        // backwards jump distance = (loop instruction location) + (size of loop instruction) - (address of loop condition)
+        let jump_distance = self.chunk.len() + 3 - mark.0;
+
+        if jump_distance > u16::MAX as usize {
+            return Err(ParseError::JumpTooLong {
+                approx_jump_location: mark.1.span,
+            }
+            .into());
+        }
+
+        let high_byte = ((jump_distance >> 8) & 0xFF) as u8;
+        let low_byte = (jump_distance & 0xFF) as u8;
+
+        self.emit_bytes_at(&[Opcode::Loop as u8, high_byte, low_byte], mark.1);
+
+        Ok(())
     }
 
     fn report_and_continue(&mut self, err: Report) -> () {
@@ -352,6 +375,8 @@ fn statement(parser: &mut Parser) -> Result<()> {
         print_statement(parser)
     } else if parser.match_token(TokenType::If) {
         if_statement(parser)
+    } else if parser.match_token(TokenType::While) {
+        while_statement(parser)
     } else if parser.match_token(TokenType::LeftBrace) {
         parser.begin_scope();
         block_statement(parser)?;
@@ -374,6 +399,7 @@ fn print_statement(parser: &mut Parser) -> Result<()> {
 }
 
 fn if_statement(parser: &mut Parser) -> Result<()> {
+    let if_location = parser.previous.location();
     parser.consume(TokenType::LeftParen, "expected a '(' after 'if'")?;
     expression(parser)?;
     parser.consume(
@@ -381,18 +407,38 @@ fn if_statement(parser: &mut Parser) -> Result<()> {
         "expected a ')' after the condition of an if statement",
     )?;
 
-    let then_jump_offset = parser.emit_jump(Opcode::JumpIfFalse, parser.current.location());
-    parser.emit_byte_at(Opcode::Pop as u8, parser.current.location());
+    let then_jump_offset = parser.emit_jump(Opcode::JumpIfFalse, if_location.clone());
+    let rparen_location = parser.previous.location();
+    parser.emit_byte(Opcode::Pop as u8);
     statement(parser)?;
-    let else_jump_offset = parser.emit_jump(Opcode::Jump, parser.previous.location());
+    let else_jump_offset = parser.emit_jump(Opcode::Jump, if_location);
     parser.patch_jump(then_jump_offset)?;
-    parser.emit_byte_at(Opcode::Pop as u8, parser.previous.location());
+    parser.emit_byte_at(Opcode::Pop as u8, rparen_location);
 
     if parser.match_token(TokenType::Else) {
         statement(parser)?;
     }
 
     parser.patch_jump(else_jump_offset)
+}
+
+fn while_statement(parser: &mut Parser) -> Result<()> {
+    let loop_start_mark = parser.mark();
+
+    parser.consume(TokenType::LeftParen, "expected a '(' after 'while'")?;
+    expression(parser)?;
+    parser.consume(
+        TokenType::RightParen,
+        "expected a ')' after the condition of a while loop",
+    )?;
+    let rparen_location = parser.previous.location();
+
+    let done_jump_offset = parser.emit_jump(Opcode::JumpIfFalse, loop_start_mark.1.clone());
+    parser.emit_byte(Opcode::Pop as u8);
+    statement(parser)?;
+    parser.emit_loop(loop_start_mark)?;
+    parser.patch_jump(done_jump_offset)?;
+    Ok(parser.emit_byte_at(Opcode::Pop as u8, rparen_location))
 }
 
 fn block_statement(parser: &mut Parser) -> Result<()> {
@@ -539,6 +585,27 @@ fn binary_op(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     }
 }
 
+fn logical_and(parser: &mut Parser, _can_assign: bool) -> Result<()> {
+    let short_circuit_jump_offset =
+        parser.emit_jump(Opcode::JumpIfFalse, parser.previous.location());
+    parser.emit_byte(Opcode::Pop as u8);
+
+    parse_precedence(parser, Precedence::And)?;
+
+    parser.patch_jump(short_circuit_jump_offset)
+}
+
+fn logical_or(parser: &mut Parser, _can_assign: bool) -> Result<()> {
+    let evaluate_jump_offset = parser.emit_jump(Opcode::JumpIfFalse, parser.previous.location());
+    let short_circuit_jump_offset = parser.emit_jump(Opcode::Jump, parser.previous.location());
+
+    parser.patch_jump(evaluate_jump_offset)?;
+    parser.emit_byte(Opcode::Pop as u8);
+
+    parse_precedence(parser, Precedence::Or)?;
+    parser.patch_jump(short_circuit_jump_offset)
+}
+
 fn literal(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     match parser.previous.tpe {
         TokenType::True => Ok(parser.emit_byte(Opcode::True as u8)),
@@ -679,7 +746,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Number
     ParseRule { prefix: Some(number), infix: None, precedence: Precedence::None },
     // TokenType::And
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(logical_and), precedence: Precedence::And },
     // TokenType::Class
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::Else
@@ -695,7 +762,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Nil
     ParseRule { prefix: Some(literal), infix: None, precedence: Precedence::None },
     // TokenType::Or
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(logical_or), precedence: Precedence::Or },
     // TokenType::Print
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::Return

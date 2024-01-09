@@ -62,6 +62,7 @@ fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -
         Opcode::Print => render_simple_instruction("Print", offset, line),
         Opcode::Jump => render_jump_instruction("Jump", true, offset, chunk, line),
         Opcode::JumpIfFalse => render_jump_instruction("Jump If False", true, offset, chunk, line),
+        Opcode::Loop => render_jump_instruction("Loop", false, offset, chunk, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
         Opcode::GetLocal => render_local_var_instruction("Get Local", offset, chunk, line),

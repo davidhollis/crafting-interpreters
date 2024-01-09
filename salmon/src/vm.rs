@@ -105,6 +105,11 @@ impl<'a> VM<Running<'a>> {
                 }
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::Loop => {
+                let distance = self.next_u16()?;
+                self.state.ip -= distance as usize;
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Return => Ok(RuntimeAction::Halt),
             Opcode::Pop => {
                 let _ = self.pop()?;
