@@ -142,6 +142,28 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn emit_jump(&mut self, jump_op: Opcode, location: SourceLocation) -> usize {
+        self.emit_bytes_at(&[jump_op as u8, 0xFF, 0xFF], location);
+        self.chunk.len() - 2
+    }
+
+    fn patch_jump(&mut self, jump_arg_offset: usize) -> Result<()> {
+        // jump distance = (current chunk length) - (address of first jump argument byte) - (size of jump argument)
+        let jump_distance = self.chunk.len() - jump_arg_offset - 2;
+
+        if jump_distance > u16::MAX as usize {
+            return Err(ParseError::JumpTooLong {
+                approx_jump_location: self.chunk.location(jump_arg_offset).unwrap().span,
+            }
+            .into());
+        }
+
+        self.chunk
+            .patch(jump_arg_offset, ((jump_distance >> 8) & 0xFF) as u8)?; // most significant 8 bits
+        self.chunk
+            .patch(jump_arg_offset + 1, (jump_distance & 0xFF) as u8) // least significant 8 bits
+    }
+
     fn report_and_continue(&mut self, err: Report) -> () {
         if !self.panic_mode {
             self.panic_mode = true;
@@ -328,6 +350,8 @@ fn define_global_variable(
 fn statement(parser: &mut Parser) -> Result<()> {
     if parser.match_token(TokenType::Print) {
         print_statement(parser)
+    } else if parser.match_token(TokenType::If) {
+        if_statement(parser)
     } else if parser.match_token(TokenType::LeftBrace) {
         parser.begin_scope();
         block_statement(parser)?;
@@ -347,6 +371,28 @@ fn print_statement(parser: &mut Parser) -> Result<()> {
     )?;
     parser.emit_byte_at(Opcode::Print as u8, print_location);
     Ok(())
+}
+
+fn if_statement(parser: &mut Parser) -> Result<()> {
+    parser.consume(TokenType::LeftParen, "expected a '(' after 'if'")?;
+    expression(parser)?;
+    parser.consume(
+        TokenType::RightParen,
+        "expected a ')' after the condition of an if statement",
+    )?;
+
+    let then_jump_offset = parser.emit_jump(Opcode::JumpIfFalse, parser.current.location());
+    parser.emit_byte_at(Opcode::Pop as u8, parser.current.location());
+    statement(parser)?;
+    let else_jump_offset = parser.emit_jump(Opcode::Jump, parser.previous.location());
+    parser.patch_jump(then_jump_offset)?;
+    parser.emit_byte_at(Opcode::Pop as u8, parser.previous.location());
+
+    if parser.match_token(TokenType::Else) {
+        statement(parser)?;
+    }
+
+    parser.patch_jump(else_jump_offset)
 }
 
 fn block_statement(parser: &mut Parser) -> Result<()> {
@@ -734,6 +780,14 @@ pub enum ParseError {
         #[label("here")]
         bad_use_span: (usize, usize),
         line: usize,
+    },
+    #[error("attempted to jump over more than 65535 bytes")]
+    #[diagnostic(
+        code(compiler::internal::jump_too_long),
+        help("This is due to an internal limitation.")
+    )]
+    JumpTooLong {
+        approx_jump_location: (usize, usize),
     },
     #[error("failed to produce bytecode due to the following error(s)")]
     #[diagnostic(code(compiler::no_bytecode))]

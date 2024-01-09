@@ -93,6 +93,18 @@ impl<'a> VM<Running<'a>> {
                 println!("{}", self.pop()?.print());
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::Jump => {
+                let distance = self.next_u16()?;
+                self.state.ip += distance as usize;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::JumpIfFalse => {
+                let distance = self.next_u16()?;
+                if self.peek(0).is_falsy() {
+                    self.state.ip += distance as usize;
+                }
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Return => Ok(RuntimeAction::Halt),
             Opcode::Pop => {
                 let _ = self.pop()?;
@@ -327,6 +339,14 @@ impl<'a> VM<Running<'a>> {
         let current_byte = self.state.chunk.byte(self.state.ip)?;
         self.state.ip += 1;
         Ok(*current_byte)
+    }
+
+    fn next_u16(&mut self) -> Result<u16> {
+        let high_byte = self.state.chunk.byte(self.state.ip)?;
+        let low_byte = self.state.chunk.byte(self.state.ip + 1)?;
+        self.state.ip += 2;
+
+        Ok(((*high_byte as u16) << 8) | (*low_byte as u16))
     }
 
     fn next_opcode(&mut self) -> Result<Opcode> {

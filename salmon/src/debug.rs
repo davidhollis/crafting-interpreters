@@ -60,6 +60,8 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
 fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -> Result<usize> {
     match (*chunk.byte(offset)?).try_into()? {
         Opcode::Print => render_simple_instruction("Print", offset, line),
+        Opcode::Jump => render_jump_instruction("Jump", true, offset, chunk, line),
+        Opcode::JumpIfFalse => render_jump_instruction("Jump If False", true, offset, chunk, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
         Opcode::GetLocal => render_local_var_instruction("Get Local", offset, chunk, line),
@@ -100,7 +102,7 @@ fn render_constant(
 
     let const_idx = *chunk.byte(offset + 1)?;
     color(line, Color::White)?;
-    write!(line, " 0x{:02x} ", const_idx).into_diagnostic()?;
+    write!(line, "  0x{:02x} ", const_idx).into_diagnostic()?;
     color(line, Color::Blue)?;
     writeln!(line, "({})", chunk.constant_at(const_idx)?.show()).into_diagnostic()?;
 
@@ -118,11 +120,38 @@ fn render_local_var_instruction(
 
     let stack_idx = *chunk.byte(offset + 1)?;
     color(line, Color::White)?;
-    writeln!(line, " 0x{:02x} ", stack_idx).into_diagnostic()?;
+    writeln!(line, "  0x{:02x} ", stack_idx).into_diagnostic()?;
 
     // TODO(hollis): find a way to represent debugging symbols so we can include a local variable name here
 
     Ok(offset + 2)
+}
+
+fn render_jump_instruction(
+    instr_name: &str,
+    forward: bool,
+    offset: usize,
+    chunk: &Chunk,
+    line: &mut Buffer,
+) -> Result<usize> {
+    let high_byte = *chunk.byte(offset + 1)? as usize;
+    let low_byte = *chunk.byte(offset + 2)? as usize;
+    let jump = (high_byte << 8) | low_byte;
+    let destination = if forward {
+        offset + 3 + jump
+    } else {
+        offset + 3 - jump
+    };
+
+    color(line, Color::Green)?;
+    write!(line, "{:-16}", instr_name).into_diagnostic()?;
+
+    color(line, Color::White)?;
+    write!(line, " {:5} ", jump).into_diagnostic()?;
+    color(line, Color::Blue)?;
+    writeln!(line, "(-> {})", destination).into_diagnostic()?;
+
+    Ok(offset + 3)
 }
 
 fn color(buf: &mut Buffer, color: Color) -> Result<()> {

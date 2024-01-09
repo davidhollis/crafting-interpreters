@@ -28,6 +28,8 @@ pub enum Opcode {
     Not,
     Negate,
     Print,
+    Jump,
+    JumpIfFalse,
     Return,
 }
 
@@ -75,6 +77,15 @@ impl Chunk {
         self.code
             .get(offset)
             .ok_or(ChunkError::InvalidOffset(offset).into())
+    }
+
+    pub fn patch(&mut self, offset: usize, new_value: u8) -> Result<()> {
+        let patched_address = self
+            .code
+            .get_mut(offset)
+            .ok_or::<ErrReport>(ChunkError::InvalidOffset(offset).into())?;
+        *patched_address = new_value;
+        Ok(())
     }
 
     pub fn location(&self, offset: usize) -> Result<&SourceLocation> {
