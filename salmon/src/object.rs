@@ -1,85 +1,78 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
+
+use crate::table::Table;
 
 #[derive(Clone)]
-pub struct Object {
-    pub body: ObjectType,
-    pub hash: u32,
+pub enum Object {
+    String(Arc<StringData>),
 }
 
 impl Object {
     pub fn string(contents: &str) -> Object {
-        let hash = string::hash(contents);
-        Object {
-            body: ObjectType::String {
-                contents: contents.into(),
-            },
-            hash,
-        }
+        Object::String(StringData::new(contents))
     }
 
     pub fn show(&self) -> String {
-        match &self.body {
-            ObjectType::String { contents } => format!(r#""{}""#, contents),
+        match self {
+            Object::String(data) => format!(r#""{}""#, data.contents),
         }
     }
 
     pub fn print(&self) -> String {
-        match &self.body {
-            ObjectType::String { contents } => contents.to_string(),
+        match self {
+            Object::String(data) => data.contents.to_string(),
         }
     }
 }
 
 impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.body {
-            ObjectType::String { contents } => write!(f, r#""{}" (of type string)"#, contents),
+        match self {
+            Object::String(data) => write!(f, r#""{}" (of type string)"#, data.contents),
         }
     }
 }
 
 impl PartialEq for Object {
     fn eq(&self, other: &Self) -> bool {
-        match (&self.body, &other.body) {
-            (
-                ObjectType::String { contents: this_str },
-                ObjectType::String {
-                    contents: other_str,
-                },
-            ) => this_str == other_str,
+        match (self, other) {
+            (Object::String(this_data), Object::String(other_data)) => {
+                Arc::ptr_eq(this_data, other_data)
+            }
         }
     }
 }
 
 #[derive(Clone)]
-pub enum ObjectType {
-    String { contents: Box<str> },
+pub struct StringData {
+    contents: Box<str>,
+    pub hash: u32,
 }
 
-pub mod string {
-    use std::sync::Arc;
+impl StringData {
+    pub fn new(contents: &str) -> Arc<StringData> {
+        let hash = Self::hash(contents);
+        Arc::new(StringData {
+            contents: contents.into(),
+            hash,
+        })
+    }
 
-    use crate::table::Table;
+    pub fn prehashed(contents: &str, hash: u32) -> Arc<StringData> {
+        Arc::new(StringData {
+            contents: contents.into(),
+            hash,
+        })
+    }
 
-    use super::{Object, ObjectType};
-
-    pub fn concatenate(left: &Object, right: &Object, strings: &mut Table) -> Arc<Object> {
-        match (&left.body, &right.body) {
-            (
-                ObjectType::String {
-                    contents: left_contents,
-                },
-                ObjectType::String {
-                    contents: right_contents,
-                },
-            ) => {
-                let contents = left_contents
-                    .chars()
-                    .chain(right_contents.chars())
-                    .collect::<String>();
-                strings.intern_string(&contents)
-            }
-        }
+    pub fn concatenate(&self, right: &StringData, strings: &mut Table) -> Arc<StringData> {
+        strings.intern_string(
+            &self
+                .contents
+                .chars()
+                .chain(right.contents.chars())
+                .collect::<String>(),
+        )
     }
 
     // FNV-1a
@@ -90,5 +83,9 @@ pub mod string {
             hash = hash.wrapping_mul(16777619u32);
         }
         hash
+    }
+
+    pub fn equals_interned_string(&self, other_hash: u32, other_contents: &str) -> bool {
+        self.hash == other_hash && self.contents.as_ref() == other_contents
     }
 }

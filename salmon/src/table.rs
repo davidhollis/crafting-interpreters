@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    object::{self, Object, ObjectType},
-    value::Value,
-};
+use crate::{object::StringData, value::Value};
 
 const MAX_LOAD: f32 = 0.75;
 
@@ -20,7 +17,7 @@ impl Table {
         }
     }
 
-    pub fn get(&self, key: &Arc<Object>) -> Option<Value> {
+    pub fn get(&self, key: &Arc<StringData>) -> Option<Value> {
         if self.count == 0 {
             None
         } else {
@@ -31,7 +28,7 @@ impl Table {
         }
     }
 
-    pub fn set(&mut self, key: Arc<Object>, value: Value) -> bool {
+    pub fn set(&mut self, key: Arc<StringData>, value: Value) -> bool {
         if (self.count + 1) as f32 > self.entries.len() as f32 * MAX_LOAD {
             self.adjust_capacity();
         }
@@ -71,7 +68,7 @@ impl Table {
         }
     }
 
-    pub fn delete(&mut self, key: &Arc<Object>) -> bool {
+    pub fn delete(&mut self, key: &Arc<StringData>) -> bool {
         if self.count == 0 {
             false
         } else {
@@ -87,13 +84,13 @@ impl Table {
         }
     }
 
-    pub fn intern_string(&mut self, key_str: &str) -> Arc<Object> {
+    pub fn intern_string(&mut self, key_str: &str) -> Arc<StringData> {
         if self.count == 0 {
-            let new_string = Arc::new(Object::string(key_str));
+            let new_string = StringData::new(key_str);
             self.set(new_string.clone(), Value::Nil);
             new_string
         } else {
-            let hash = object::string::hash(key_str);
+            let hash = StringData::hash(key_str);
             let capacity = self.entries.len();
             let mut index = hash as usize % capacity;
 
@@ -101,26 +98,18 @@ impl Table {
                 match &self.entries[index] {
                     Entry::Empty => {
                         // We didn't find the interned string--add and return it.
-                        let new_string = Arc::new(Object {
-                            body: ObjectType::String {
-                                contents: key_str.into(),
-                            },
-                            hash,
-                        });
+                        let new_string = StringData::prehashed(key_str, hash);
                         self.set(new_string.clone(), Value::Nil);
                         return new_string;
                     }
-                    Entry::Full { key, .. } => match key.as_ref() {
-                        Object {
-                            body: ObjectType::String { contents },
-                            hash: entry_hash,
-                        } if *entry_hash == hash && contents.as_ref() == key_str => {
-                            // We found a matching string--return it.
+                    Entry::Full { key, .. } => {
+                        if key.equals_interned_string(hash, key_str) {
                             return key.clone();
+                        } else {
+                            // Found a full container, but it didn't match--continue.
+                            ()
                         }
-                        // We found an entry, but not a matching one--continue.
-                        _ => (),
-                    },
+                    }
                     // We found a tombstone--continue.
                     Entry::Tombstone => (),
                 }
@@ -130,17 +119,17 @@ impl Table {
         }
     }
 
-    fn find_entry_for(&self, key: &Arc<Object>) -> &Entry {
+    fn find_entry_for(&self, key: &Arc<StringData>) -> &Entry {
         let entry_idx = self.find_index_for(key);
         &self.entries[entry_idx]
     }
 
-    fn find_entry_for_mut(&mut self, key: &Arc<Object>) -> &mut Entry {
+    fn find_entry_for_mut(&mut self, key: &Arc<StringData>) -> &mut Entry {
         let entry_idx = self.find_index_for(key);
         &mut self.entries[entry_idx]
     }
 
-    fn find_index_for(&self, key: &Arc<Object>) -> usize {
+    fn find_index_for(&self, key: &Arc<StringData>) -> usize {
         let capacity = self.entries.len();
         let mut index = key.hash as usize % capacity;
         let mut tombstone_idx = None;
@@ -194,21 +183,21 @@ impl Table {
 enum Entry {
     Empty,
     Tombstone,
-    Full { key: Arc<Object>, value: Value },
+    Full { key: Arc<StringData>, value: Value },
 }
 
 #[cfg(test)]
 mod test {
     use std::{collections::HashMap, sync::Arc};
 
-    use crate::{object::Object, value::Value};
+    use crate::{object::StringData, value::Value};
 
     use super::Table;
 
     #[test]
     fn it_overwrites() {
         let mut table = Table::new();
-        let abc = Arc::new(Object::string("abc"));
+        let abc = StringData::new("abc");
         assert_eq!(true, table.set(abc.clone(), Value::Number(1.0)));
         assert_eq!(false, table.set(abc.clone(), Value::Number(2.0)));
 
@@ -219,7 +208,7 @@ mod test {
     #[test]
     fn it_deletes() {
         let mut table = Table::new();
-        let abc = Arc::new(Object::string("abc"));
+        let abc = StringData::new("abc");
 
         // Table::delete() should return false if the key wasn't in the table
         assert_eq!(false, table.delete(&abc));
@@ -237,7 +226,7 @@ mod test {
     #[test]
     fn it_drops_old_keys_on_delete() {
         let mut table = Table::new();
-        let original_abc = Arc::new(Object::string("abc"));
+        let original_abc = StringData::new("abc");
         table.set(original_abc.clone(), Value::Number(1.0));
 
         // The table should hold a strong reference to the key
@@ -263,7 +252,7 @@ mod test {
 
         for n in 1..=25 {
             let raw_key = format!("test{}", n);
-            let key = Arc::new(Object::string(&raw_key));
+            let key = StringData::new(&raw_key);
             let value = Value::Number(n as f64);
             table.set(key.clone(), value.clone());
             validator.insert(raw_key.clone(), (key.clone(), Some(value)));

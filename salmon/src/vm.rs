@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
-    object,
+    object::Object,
     scanner::SourceLocation,
     table::Table,
     value::{DataType, Value},
@@ -130,7 +130,7 @@ impl<'a> VM<Running<'a>> {
             Opcode::GetGlobal => {
                 let name_idx = self.next_byte()?;
                 let global_name = self.state.chunk.constant_at(name_idx)?;
-                if let Value::Object(name_ref) = global_name {
+                if let Value::Object(Object::String(name_ref)) = global_name {
                     if let Some(value) = self.globals.get(name_ref) {
                         self.push(value)?;
                         Ok(RuntimeAction::Continue)
@@ -155,7 +155,7 @@ impl<'a> VM<Running<'a>> {
             Opcode::DefineGlobal => {
                 let name_idx = self.next_byte()?;
                 let global_name = self.state.chunk.constant_at(name_idx)?;
-                if let Value::Object(name_ref) = global_name {
+                if let Value::Object(Object::String(name_ref)) = global_name {
                     let _ = self.globals.set(name_ref.clone(), self.peek(0));
                     self.pop()?;
                     Ok(RuntimeAction::Continue)
@@ -171,7 +171,7 @@ impl<'a> VM<Running<'a>> {
             Opcode::SetGlobal => {
                 let name_idx = self.next_byte()?;
                 let global_name = self.state.chunk.constant_at(name_idx)?;
-                if let Value::Object(name_ref) = global_name {
+                if let Value::Object(name @ Object::String(name_ref)) = global_name {
                     if self.globals.set(name_ref.clone(), self.peek(0)) {
                         // If we inserted a new value, then the variable wasn't declared, so we
                         // take it back out and return an error
@@ -179,7 +179,7 @@ impl<'a> VM<Running<'a>> {
 
                         let location = self.previous_opcode_location()?;
                         Err(RuntimeError::UndefinedVariable {
-                            name: name_ref.print(),
+                            name: name.print(),
                             span: location.span,
                             line: location.line,
                         }
@@ -231,15 +231,14 @@ impl<'a> VM<Running<'a>> {
                         .into())
                     }
                 } else if left_view.is(DataType::String) && right_view.is(DataType::String) {
-                    if let (Value::Object(right_str), Value::Object(left_str)) =
-                        (self.pop()?, self.pop()?)
+                    if let (
+                        Value::Object(Object::String(right_str)),
+                        Value::Object(Object::String(left_str)),
+                    ) = (self.pop()?, self.pop()?)
                     {
-                        let combined_string = object::string::concatenate(
-                            left_str.as_ref(),
-                            right_str.as_ref(),
-                            &mut self.strings,
-                        );
-                        self.push(Value::Object(combined_string))?;
+                        let combined_string =
+                            left_str.concatenate(right_str.as_ref(), &mut self.strings);
+                        self.push(Value::Object(Object::String(combined_string)))?;
                         Ok(RuntimeAction::Continue)
                     } else {
                         Err(RuntimeError::Bug {

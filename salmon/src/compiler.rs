@@ -3,6 +3,7 @@ use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
+    object::Object,
     scanner::{Scanner, SourceLocation, Token, TokenType},
     table::Table,
     value::Value,
@@ -241,7 +242,7 @@ impl<'a> Parser<'a> {
 
     fn identifier_constant(&mut self, name_token: &Token) -> Result<u8> {
         let identifier_name = self.chunk.strings.intern_string(&name_token.lexeme);
-        self.make_constant(Value::Object(identifier_name))
+        self.make_constant(Value::Object(Object::String(identifier_name)))
     }
 
     fn begin_scope(&mut self) -> () {
@@ -554,7 +555,7 @@ fn string(parser: &mut Parser, _can_assign: bool) -> Result<()> {
         .chunk
         .strings
         .intern_string(&parser.previous.lexeme[1..(parser.previous.lexeme.len() - 1)]);
-    let const_id = parser.make_constant(Value::Object(string_literal))?;
+    let const_id = parser.make_constant(Value::Object(Object::String(string_literal)))?;
     Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
 }
 

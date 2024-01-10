@@ -1,6 +1,6 @@
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
-use crate::object::{Object, ObjectType};
+use crate::object::Object;
 
 #[derive(PartialEq, Eq)]
 pub enum DataType {
@@ -14,19 +14,11 @@ pub enum DataType {
 pub enum Value {
     Number(f64),
     Boolean(bool),
-    Object(Arc<Object>),
+    Object(Object),
     Nil,
 }
 
 impl Value {
-    pub fn string(contents: &str) -> Value {
-        Value::Object(Arc::new(Object::string(contents)))
-    }
-
-    pub fn wrap(object: Object) -> Value {
-        Value::Object(Arc::new(object))
-    }
-
     pub fn show(&self) -> String {
         match self {
             Value::Number(n) => format!("{}", n),
@@ -60,12 +52,7 @@ impl Value {
         match self {
             Value::Number(_) => data_type == DataType::Number,
             Value::Boolean(_) => data_type == DataType::Boolean,
-            Value::Object(obj_ref) => match obj_ref.as_ref() {
-                Object {
-                    body: ObjectType::String { .. },
-                    ..
-                } => data_type == DataType::String,
-            },
+            Value::Object(Object::String(_)) => data_type == DataType::String,
             Value::Nil => data_type == DataType::Nil,
         }
     }
@@ -88,7 +75,7 @@ impl PartialEq for Value {
         match (self, other) {
             (Self::Number(l0), Self::Number(r0)) => l0 == r0,
             (Self::Boolean(l0), Self::Boolean(r0)) => l0 == r0,
-            (Self::Object(l0), Self::Object(r0)) => Arc::ptr_eq(&l0, &r0),
+            (Self::Object(l0), Self::Object(r0)) => l0 == r0,
             (Self::Nil, Self::Nil) => true,
             _ => false,
         }
