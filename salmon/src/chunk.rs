@@ -57,17 +57,6 @@ impl Chunk {
         }
     }
 
-    pub fn new_with_strings(strings: &Table) -> Chunk {
-        let mut new_table = Table::new();
-        new_table.add_all(strings);
-        Chunk {
-            code: vec![],
-            locations: vec![],
-            constants: vec![],
-            strings: new_table,
-        }
-    }
-
     pub fn write_byte(&mut self, byte: u8, location: SourceLocation) -> &mut Self {
         self.code.push(byte);
         self.locations.push(location);

@@ -1,10 +1,11 @@
 use std::{fmt::Debug, sync::Arc};
 
-use crate::table::Table;
+use crate::{chunk::Chunk, table::Table};
 
 #[derive(Clone)]
 pub enum Object {
     String(Arc<StringData>),
+    Function(Arc<FunctionData>),
 }
 
 impl Object {
@@ -15,12 +16,23 @@ impl Object {
     pub fn show(&self) -> String {
         match self {
             Object::String(data) => format!(r#""{}""#, data.contents),
+            Object::Function(data) => match data.as_ref() {
+                FunctionData {
+                    arity,
+                    name: Some(name),
+                    ..
+                } => format!("<fn {}/{}>", name.contents, arity),
+                FunctionData {
+                    arity, name: None, ..
+                } => format!("<anonymous fn/{}>", arity),
+            },
         }
     }
 
     pub fn print(&self) -> String {
         match self {
             Object::String(data) => data.contents.to_string(),
+            Object::Function(_) => self.show(),
         }
     }
 }
@@ -29,6 +41,7 @@ impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Object::String(data) => write!(f, r#""{}" (of type string)"#, data.contents),
+            Object::Function(_) => write!(f, "{}", self.show()),
         }
     }
 }
@@ -39,11 +52,14 @@ impl PartialEq for Object {
             (Object::String(this_data), Object::String(other_data)) => {
                 Arc::ptr_eq(this_data, other_data)
             }
+            (Object::Function(this_data), Object::Function(other_data)) => {
+                Arc::ptr_eq(this_data, other_data)
+            }
+            _ => false,
         }
     }
 }
 
-#[derive(Clone)]
 pub struct StringData {
     contents: Box<str>,
     pub hash: u32,
@@ -87,5 +103,25 @@ impl StringData {
 
     pub fn equals_interned_string(&self, other_hash: u32, other_contents: &str) -> bool {
         self.hash == other_hash && self.contents.as_ref() == other_contents
+    }
+}
+
+pub struct FunctionData {
+    pub arity: usize,
+    pub chunk: Chunk,
+    pub name: Option<Arc<StringData>>,
+}
+
+impl FunctionData {
+    pub fn undefined() -> FunctionData {
+        FunctionData {
+            arity: 0,
+            chunk: Chunk::new(),
+            name: None,
+        }
+    }
+
+    pub fn finalize(self) -> Arc<FunctionData> {
+        Arc::new(self)
     }
 }

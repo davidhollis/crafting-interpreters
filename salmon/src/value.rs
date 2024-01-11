@@ -7,6 +7,7 @@ pub enum DataType {
     Number,
     Boolean,
     String,
+    Function,
     Nil,
 }
 
@@ -53,6 +54,7 @@ impl Value {
             Value::Number(_) => data_type == DataType::Number,
             Value::Boolean(_) => data_type == DataType::Boolean,
             Value::Object(Object::String(_)) => data_type == DataType::String,
+            Value::Object(Object::Function(_)) => data_type == DataType::Function,
             Value::Nil => data_type == DataType::Nil,
         }
     }

@@ -1,29 +1,32 @@
+use std::sync::Arc;
+
 use miette::{Diagnostic, Report, Result};
 use thiserror::Error;
 
 use crate::{
-    chunk::{Chunk, Opcode},
-    object::Object,
+    chunk::Opcode,
+    object::{FunctionData, Object, StringData},
     scanner::{Scanner, SourceLocation, Token, TokenType},
     table::Table,
     value::Value,
     vm,
 };
 
-pub fn compile(source_code: &str) -> Result<Chunk> {
-    let mut parser = Parser::new(Scanner::new(source_code), Chunk::new());
+pub fn compile(source_code: &str) -> Result<Arc<FunctionData>> {
+    let mut parser = Parser::new(Scanner::new(source_code));
 
     parser.parse();
     parser.finalize()
 }
 
-pub fn compile_repl(source_code: &str, line: usize, vm_strings: &Table) -> Result<Chunk> {
+pub fn compile_repl(
+    source_code: &str,
+    line: usize,
+    vm_strings: &Table,
+) -> Result<Arc<FunctionData>> {
     // TODO(hollis): We should handle "unexpected EOF" differently here, preserving the parser
     //               state so that we can continue parsing across another line.
-    let mut parser = Parser::new(
-        Scanner::new_line(source_code, line),
-        Chunk::new_with_strings(vm_strings),
-    );
+    let mut parser = Parser::new_with_strings(Scanner::new_line(source_code, line), vm_strings);
 
     parser.parse();
     parser.finalize()
@@ -34,26 +37,93 @@ struct LocalVariable<'a> {
     depth: Option<u8>,
 }
 
+enum UnitType {
+    Function,
+    Script,
+}
+
+struct CompilerState<'a> {
+    enclosing: Option<Box<CompilerState<'a>>>,
+    compilation_unit: FunctionData,
+    unit_type: UnitType,
+    locals: Vec<LocalVariable<'a>>,
+    scope_depth: u8,
+}
+
+impl<'a> CompilerState<'a> {
+    fn new_toplevel(unit_type: UnitType) -> CompilerState<'static> {
+        let mut compilation_unit = FunctionData::undefined();
+        compilation_unit.name = Some(StringData::new("<toplevel>"));
+        CompilerState {
+            enclosing: None,
+            compilation_unit,
+            unit_type,
+            locals: vec![],
+            scope_depth: 0,
+        }
+    }
+
+    fn new_inner(self, name: Arc<StringData>, unit_type: UnitType) -> CompilerState<'a> {
+        let mut compilation_unit = FunctionData::undefined();
+        compilation_unit.name = Some(name);
+        CompilerState {
+            enclosing: Some(Box::new(self)),
+            compilation_unit,
+            unit_type,
+            locals: vec![],
+            scope_depth: 0,
+        }
+    }
+
+    fn finalize(
+        mut self,
+        source_location: SourceLocation,
+    ) -> (CompilerState<'a>, Arc<FunctionData>) {
+        self.compilation_unit
+            .chunk
+            .write_byte(Opcode::Return as u8, source_location);
+        let finished_function = self.compilation_unit.finalize();
+        let parent = self
+            .enclosing
+            .map(|outer| *outer)
+            .unwrap_or_else(|| CompilerState::new_toplevel(UnitType::Script));
+
+        (parent, finished_function)
+    }
+}
+
 struct Parser<'a> {
     scanner: Scanner<'a>,
     previous: Token<'a>,
     current: Token<'a>,
-    chunk: Chunk,
-    locals: Vec<LocalVariable<'a>>,
-    scope_depth: u8,
+    compiler: CompilerState<'a>,
+    strings: Table,
     errors: Vec<ParseError>,
     panic_mode: bool,
 }
 
 impl<'a> Parser<'a> {
-    fn new(scanner: Scanner<'a>, chunk: Chunk) -> Parser<'a> {
+    fn new(scanner: Scanner<'a>) -> Parser<'a> {
         Parser {
             scanner,
             previous: Token::empty(),
             current: Token::empty(),
-            chunk,
-            locals: vec![],
-            scope_depth: 0,
+            compiler: CompilerState::new_toplevel(UnitType::Script),
+            strings: Table::new(),
+            errors: vec![],
+            panic_mode: false,
+        }
+    }
+
+    fn new_with_strings(scanner: Scanner<'a>, preloaded_strings: &Table) -> Parser<'a> {
+        let mut strings = Table::new();
+        strings.add_all(preloaded_strings);
+        Parser {
+            scanner,
+            previous: Token::empty(),
+            current: Token::empty(),
+            compiler: CompilerState::new_toplevel(UnitType::Script),
+            strings,
             errors: vec![],
             panic_mode: false,
         }
@@ -72,8 +142,6 @@ impl<'a> Parser<'a> {
                 self.synchronize();
             }
         }
-
-        self.emit_byte(Opcode::Return as u8);
     }
 
     fn advance(&mut self) -> () {
@@ -115,63 +183,98 @@ impl<'a> Parser<'a> {
         self.current.tpe == token_type
     }
 
-    fn finalize(self) -> Result<Chunk> {
+    fn finalize(mut self) -> Result<Arc<FunctionData>> {
         if self.errors.is_empty() {
-            Ok(self.chunk)
+            self.compiler
+                .compilation_unit
+                .chunk
+                .strings
+                .add_all(&self.strings);
+            let (_, function) = self.compiler.finalize(self.previous.location());
+            Ok(function)
         } else {
             Err(ParseError::NoBytecode(self.errors).into())
         }
     }
 
     fn emit_byte(&mut self, byte: u8) -> () {
-        let _ = self.chunk.write_byte(byte, self.previous.location());
+        let _ = self
+            .compiler
+            .compilation_unit
+            .chunk
+            .write_byte(byte, self.previous.location());
     }
 
     fn emit_byte_at(&mut self, byte: u8, location: SourceLocation) -> () {
-        let _ = self.chunk.write_byte(byte, location);
+        let _ = self
+            .compiler
+            .compilation_unit
+            .chunk
+            .write_byte(byte, location);
     }
 
     fn emit_bytes(&mut self, bytes: &[u8]) -> () {
         for byte in bytes {
-            let _ = self.chunk.write_byte(*byte, self.previous.location());
+            let _ = self
+                .compiler
+                .compilation_unit
+                .chunk
+                .write_byte(*byte, self.previous.location());
         }
     }
 
     fn emit_bytes_at(&mut self, bytes: &[u8], location: SourceLocation) -> () {
         for byte in bytes {
-            let _ = self.chunk.write_byte(*byte, location.clone());
+            let _ = self
+                .compiler
+                .compilation_unit
+                .chunk
+                .write_byte(*byte, location.clone());
         }
     }
 
     fn emit_jump(&mut self, jump_op: Opcode, location: SourceLocation) -> usize {
         self.emit_bytes_at(&[jump_op as u8, 0xFF, 0xFF], location);
-        self.chunk.len() - 2
+        self.compiler.compilation_unit.chunk.len() - 2
     }
 
     fn patch_jump(&mut self, jump_arg_offset: usize) -> Result<()> {
         // forwards jump distance = (current chunk length) - (address of first jump argument byte) - (size of jump argument)
-        let jump_distance = self.chunk.len() - jump_arg_offset - 2;
+        let jump_distance = self.compiler.compilation_unit.chunk.len() - jump_arg_offset - 2;
 
         if jump_distance > u16::MAX as usize {
             return Err(ParseError::JumpTooLong {
-                approx_jump_location: self.chunk.location(jump_arg_offset).unwrap().span,
+                approx_jump_location: self
+                    .compiler
+                    .compilation_unit
+                    .chunk
+                    .location(jump_arg_offset)
+                    .unwrap()
+                    .span,
             }
             .into());
         }
 
-        self.chunk
+        self.compiler
+            .compilation_unit
+            .chunk
             .patch(jump_arg_offset, ((jump_distance >> 8) & 0xFF) as u8)?; // most significant 8 bits
-        self.chunk
+        self.compiler
+            .compilation_unit
+            .chunk
             .patch(jump_arg_offset + 1, (jump_distance & 0xFF) as u8) // least significant 8 bits
     }
 
     fn mark(&self) -> (usize, SourceLocation) {
-        (self.chunk.len(), self.previous.location())
+        (
+            self.compiler.compilation_unit.chunk.len(),
+            self.previous.location(),
+        )
     }
 
     fn emit_loop(&mut self, mark: (usize, SourceLocation)) -> Result<()> {
         // backwards jump distance = (loop instruction location) + (size of loop instruction) - (address of loop condition)
-        let jump_distance = self.chunk.len() + 3 - mark.0;
+        let jump_distance = self.compiler.compilation_unit.chunk.len() + 3 - mark.0;
 
         if jump_distance > u16::MAX as usize {
             return Err(ParseError::JumpTooLong {
@@ -229,7 +332,7 @@ impl<'a> Parser<'a> {
     }
 
     fn make_constant(&mut self, value: Value) -> Result<u8> {
-        let const_id = self.chunk.add_constant(value);
+        let const_id = self.compiler.compilation_unit.chunk.add_constant(value);
         if const_id > (u8::MAX as usize) {
             Err(ParseError::TooManyConstants {
                 token_span: self.previous.error_span(),
@@ -241,37 +344,41 @@ impl<'a> Parser<'a> {
     }
 
     fn identifier_constant(&mut self, name_token: &Token) -> Result<u8> {
-        let identifier_name = self.chunk.strings.intern_string(&name_token.lexeme);
+        let identifier_name = self.strings.intern_string(&name_token.lexeme);
         self.make_constant(Value::Object(Object::String(identifier_name)))
     }
 
+    fn is_global_scope(&self) -> bool {
+        self.compiler.scope_depth == 0
+    }
+
     fn begin_scope(&mut self) -> () {
-        self.scope_depth += 1;
+        self.compiler.scope_depth += 1;
     }
 
     fn end_scope(&mut self) -> () {
-        self.scope_depth -= 1;
+        self.compiler.scope_depth -= 1;
 
         // Clear out the locals from this scope
-        while let Some(local) = self.locals.last() {
-            if local.depth.unwrap_or(u8::MAX) <= self.scope_depth {
+        while let Some(local) = self.compiler.locals.last() {
+            if local.depth.unwrap_or(u8::MAX) <= self.compiler.scope_depth {
                 // Once we hit a local that isn't from an inner scope, stop popping
                 break;
             }
 
             self.emit_byte(Opcode::Pop as u8);
-            let _ = self.locals.pop();
+            let _ = self.compiler.locals.pop();
         }
     }
 
     fn add_local_variable(&mut self, name_token: Token<'a>) -> Result<()> {
-        if self.locals.len() == vm::STACK_SIZE {
+        if self.compiler.locals.len() == vm::STACK_SIZE {
             return Err(ParseError::TooManyLocalVariables {
                 token_span: self.previous.error_span(),
             }
             .into());
         }
-        self.locals.push(LocalVariable {
+        self.compiler.locals.push(LocalVariable {
             name: name_token,
             depth: None,
         });
@@ -279,8 +386,8 @@ impl<'a> Parser<'a> {
     }
 
     fn mark_last_initialized(&mut self) -> () {
-        if let Some(last_local) = self.locals.last_mut() {
-            last_local.depth = Some(self.scope_depth);
+        if let Some(last_local) = self.compiler.locals.last_mut() {
+            last_local.depth = Some(self.compiler.scope_depth);
         }
     }
 }
@@ -313,7 +420,7 @@ fn var_declaration(parser: &mut Parser) -> Result<()> {
         "expected a semicolon at the end of a var declaration",
     )?;
 
-    if parser.scope_depth == 0 {
+    if parser.is_global_scope() {
         // If we're in the global scope, emit an instruction to define a global with the value on
         // top of the stack.
         define_global_variable(parser, global_id, name_location);
@@ -329,19 +436,19 @@ fn consume_variable_name(parser: &mut Parser) -> Result<u8> {
     parser.consume(TokenType::Identifier, "expected identifier after 'var'")?;
     let name_token = parser.previous.clone();
 
-    if parser.scope_depth > 0 {
+    if parser.is_global_scope() {
+        parser.identifier_constant(&name_token)
+    } else {
         declare_local_variable(parser, name_token)?;
         Ok(0)
-    } else {
-        parser.identifier_constant(&name_token)
     }
 }
 
 fn declare_local_variable<'a>(parser: &mut Parser<'a>, name_token: Token<'a>) -> Result<()> {
     // Scan for existing bindings in the same scope
-    for existing_local in parser.locals.iter().rev() {
+    for existing_local in parser.compiler.locals.iter().rev() {
         match existing_local.depth {
-            Some(d) if d < parser.scope_depth => {
+            Some(d) if d < parser.compiler.scope_depth => {
                 // Bindings are strictly ordered, so if we find a binding from an outer scope,
                 // we can stop scanning.
                 break;
@@ -552,7 +659,6 @@ fn number(parser: &mut Parser, _can_assign: bool) -> Result<()> {
 
 fn string(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     let string_literal = parser
-        .chunk
         .strings
         .intern_string(&parser.previous.lexeme[1..(parser.previous.lexeme.len() - 1)]);
     let const_id = parser.make_constant(Value::Object(Object::String(string_literal)))?;
@@ -585,7 +691,7 @@ fn resolve_variable_expression(parser: &mut Parser, can_assign: bool) -> Result<
 }
 
 fn resolve_local(parser: &Parser, name_token: &Token) -> Result<Option<u8>> {
-    for (stack_idx, local) in parser.locals.iter().enumerate().rev() {
+    for (stack_idx, local) in parser.compiler.locals.iter().enumerate().rev() {
         if local.name.lexeme == name_token.lexeme {
             // Found a local binding for this variable
             if local.depth.is_none() {
