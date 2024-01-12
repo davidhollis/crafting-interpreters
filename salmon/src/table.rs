@@ -61,7 +61,7 @@ impl Table {
         for other_entry in other.entries.iter() {
             match other_entry {
                 Entry::Full { key, value } => {
-                    let _ = self.set(key.clone(), value.clone());
+                    let _ = self.set(Arc::clone(key), value.clone());
                 }
                 _ => (),
             }
@@ -87,7 +87,7 @@ impl Table {
     pub fn intern_string(&mut self, key_str: &str) -> Arc<StringData> {
         if self.count == 0 {
             let new_string = StringData::new(key_str);
-            self.set(new_string.clone(), Value::Nil);
+            self.set(Arc::clone(&new_string), Value::Nil);
             new_string
         } else {
             let hash = StringData::hash(key_str);
@@ -99,12 +99,12 @@ impl Table {
                     Entry::Empty => {
                         // We didn't find the interned string--add and return it.
                         let new_string = StringData::prehashed(key_str, hash);
-                        self.set(new_string.clone(), Value::Nil);
+                        self.set(Arc::clone(&new_string), Value::Nil);
                         return new_string;
                     }
                     Entry::Full { key, .. } => {
                         if key.equals_interned_string(hash, key_str) {
-                            return key.clone();
+                            return Arc::clone(key);
                         } else {
                             // Found a full container, but it didn't match--continue.
                             ()
@@ -198,8 +198,8 @@ mod test {
     fn it_overwrites() {
         let mut table = Table::new();
         let abc = StringData::new("abc");
-        assert_eq!(true, table.set(abc.clone(), Value::Number(1.0)));
-        assert_eq!(false, table.set(abc.clone(), Value::Number(2.0)));
+        assert_eq!(true, table.set(Arc::clone(&abc), Value::Number(1.0)));
+        assert_eq!(false, table.set(Arc::clone(&abc), Value::Number(2.0)));
 
         let current_value = table.get(&abc);
         assert_eq!(Some(Value::Number(2.0)), current_value);
@@ -214,7 +214,7 @@ mod test {
         assert_eq!(false, table.delete(&abc));
 
         // Table::delete() should return true if the key was in the table
-        table.set(abc.clone(), Value::Number(1.0));
+        table.set(Arc::clone(&abc), Value::Number(1.0));
         assert_eq!(true, table.delete(&abc));
 
         // After a delete, the key should no longer be in the table
@@ -227,7 +227,7 @@ mod test {
     fn it_drops_old_keys_on_delete() {
         let mut table = Table::new();
         let original_abc = StringData::new("abc");
-        table.set(original_abc.clone(), Value::Number(1.0));
+        table.set(Arc::clone(&original_abc), Value::Number(1.0));
 
         // The table should hold a strong reference to the key
         assert_eq!(2, Arc::strong_count(&original_abc));
@@ -254,20 +254,20 @@ mod test {
             let raw_key = format!("test{}", n);
             let key = StringData::new(&raw_key);
             let value = Value::Number(n as f64);
-            table.set(key.clone(), value.clone());
-            validator.insert(raw_key.clone(), (key.clone(), Some(value)));
+            table.set(Arc::clone(&key), value.clone());
+            validator.insert(raw_key.clone(), (Arc::clone(&key), Some(value)));
 
             if n % 3 == 0 {
                 let doubled = Value::Number((n * 2) as f64);
-                table.set(key.clone(), doubled.clone());
-                validator.insert(raw_key.clone(), (key.clone(), Some(doubled)));
+                table.set(Arc::clone(&key), doubled.clone());
+                validator.insert(raw_key.clone(), (Arc::clone(&key), Some(doubled)));
             }
 
             if n % 5 == 0 {
                 let raw_prev_key = format!("test{}", n - 1);
                 let prev_key = &validator[&raw_prev_key].0;
                 table.delete(prev_key);
-                validator.insert(raw_prev_key.clone(), (prev_key.clone(), None));
+                validator.insert(raw_prev_key.clone(), (Arc::clone(prev_key), None));
             }
         }
 

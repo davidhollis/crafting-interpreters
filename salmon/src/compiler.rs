@@ -58,7 +58,10 @@ impl<'a> CompilerState<'a> {
             enclosing: None,
             compilation_unit,
             unit_type,
-            locals: vec![],
+            locals: vec![LocalVariable {
+                name: Token::blank_name(),
+                depth: Some(0),
+            }],
             scope_depth: 0,
         }
     }
@@ -70,7 +73,10 @@ impl<'a> CompilerState<'a> {
             enclosing: Some(Box::new(self)),
             compilation_unit,
             unit_type,
-            locals: vec![],
+            locals: vec![LocalVariable {
+                name: Token::blank_name(),
+                depth: Some(0),
+            }],
             scope_depth: 0,
         }
     }

@@ -113,6 +113,15 @@ impl Token<'_> {
         }
     }
 
+    pub fn blank_name() -> Token<'static> {
+        Token {
+            tpe: TokenType::Identifier,
+            lexeme: "",
+            source_offset: 0,
+            line: 0,
+        }
+    }
+
     pub fn error_span(&self) -> (usize, usize) {
         (self.source_offset, self.lexeme.len())
     }

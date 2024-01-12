@@ -91,6 +91,10 @@ impl StringData {
         )
     }
 
+    pub fn to_string(&self) -> String {
+        self.contents.to_string()
+    }
+
     // FNV-1a
     pub fn hash(key: &str) -> u32 {
         let mut hash = 2166136261u32;

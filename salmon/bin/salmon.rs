@@ -43,10 +43,10 @@ fn run_file(path: &PathBuf, opts: &Salmon) -> Result<()> {
     let vm = salmon::vm::new();
 
     let vm = if opts.debug {
-        debug::disassemble_chunk(file_name, &bytecode)?;
-        vm.trace(&bytecode, &mut debug::DisassemblingTracer::new())
+        debug::disassemble_chunk(file_name, &bytecode.chunk)?;
+        vm.trace(bytecode, &mut debug::DisassemblingTracer::new())
     } else {
-        vm.interpret(&bytecode)
+        vm.interpret(bytecode)
     };
 
     vm.finish()
@@ -68,10 +68,13 @@ fn run_repl(opts: &Salmon) -> Result<()> {
                 match compile_repl(&line, line_number, &vm.strings) {
                     Ok(code) => {
                         vm = if opts.debug {
-                            debug::disassemble_chunk(&format!("repl line {}", line_number), &code)?;
-                            vm.trace(&code, &mut tracer)
+                            debug::disassemble_chunk(
+                                &format!("repl line {}", line_number),
+                                &code.chunk,
+                            )?;
+                            vm.trace(code, &mut tracer)
                         } else {
-                            vm.interpret(&code)
+                            vm.interpret(code)
                         };
                         let line_result;
                         (vm, line_result) = vm.extract_result();
