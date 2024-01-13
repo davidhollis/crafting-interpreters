@@ -66,6 +66,16 @@ impl<'a> CompilerState<'a> {
         }
     }
 
+    fn blank() -> CompilerState<'static> {
+        CompilerState {
+            enclosing: None,
+            compilation_unit: FunctionData::undefined(),
+            unit_type: UnitType::Script,
+            locals: vec![],
+            scope_depth: 0,
+        }
+    }
+
     fn new_inner(self, name: Arc<StringData>, unit_type: UnitType) -> CompilerState<'a> {
         let mut compilation_unit = FunctionData::undefined();
         compilation_unit.name = Some(name);
@@ -396,6 +406,20 @@ impl<'a> Parser<'a> {
             last_local.depth = Some(self.compiler.scope_depth);
         }
     }
+
+    fn new_compilation_unit(&mut self, name: Arc<StringData>, unit_type: UnitType) -> () {
+        let current_compiler = std::mem::replace(&mut self.compiler, CompilerState::blank());
+        self.compiler = current_compiler.new_inner(name, unit_type);
+    }
+
+    fn finish_compilation_unit(&mut self, source_location: SourceLocation) -> Arc<FunctionData> {
+        let current_compiler = std::mem::replace(&mut self.compiler, CompilerState::blank());
+        let resulting_function: Arc<FunctionData>;
+
+        (self.compiler, resulting_function) = current_compiler.finalize(source_location);
+
+        resulting_function
+    }
 }
 
 // TODO(hollis): I'm not happy with the organization of this module
@@ -403,11 +427,30 @@ impl<'a> Parser<'a> {
 //               but others could very realistically be associated functions on Parser
 
 fn declaration(parser: &mut Parser) -> Result<()> {
-    if parser.match_token(TokenType::Var) {
+    if parser.match_token(TokenType::Fun) {
+        function_declaration(parser)
+    } else if parser.match_token(TokenType::Var) {
         var_declaration(parser)
     } else {
         statement(parser)
     }
+}
+
+fn function_declaration(parser: &mut Parser) -> Result<()> {
+    let global_id = consume_variable_name(parser)?;
+    let name_location = parser.previous.location();
+
+    if !parser.is_global_scope() {
+        parser.mark_last_initialized();
+    }
+
+    build_function(parser, UnitType::Function)?;
+
+    if parser.is_global_scope() {
+        define_global_variable(parser, global_id, name_location);
+    }
+
+    Ok(())
 }
 
 fn var_declaration(parser: &mut Parser) -> Result<()> {
@@ -482,6 +525,52 @@ fn define_global_variable(
     source_location: SourceLocation,
 ) -> () {
     parser.emit_bytes_at(&[Opcode::DefineGlobal as u8, global_id], source_location);
+}
+
+fn build_function(parser: &mut Parser, unit_type: UnitType) -> Result<()> {
+    let function_name_location = parser.previous.location();
+    let function_name_raw = parser.previous.lexeme;
+    let function_name = parser.strings.intern_string(function_name_raw);
+    parser.new_compilation_unit(function_name, unit_type);
+    parser.begin_scope();
+
+    parser.consume(
+        TokenType::LeftParen,
+        "expected a '(' afetr the name of a function declaration",
+    )?;
+
+    // Argument list
+    if !parser.check_token(TokenType::RightParen) {
+        loop {
+            parser.compiler.compilation_unit.arity += 1;
+            if parser.compiler.compilation_unit.arity > 255 {
+                return Err(ParseError::TooManyArguments {
+                    token_span: parser.current.error_span(),
+                }
+                .into());
+            }
+            let _ = consume_variable_name(parser)?;
+            parser.mark_last_initialized();
+
+            if !parser.match_token(TokenType::Comma) {
+                break;
+            }
+        }
+    }
+
+    parser.consume(
+        TokenType::RightParen,
+        "expected a ')' after the argument list of a function declaration",
+    )?;
+    parser.consume(
+        TokenType::LeftBrace,
+        "expected a '{' before a function body",
+    )?;
+    block_statement(parser)?;
+
+    let function = parser.finish_compilation_unit(parser.previous.location());
+    let const_idx = parser.make_constant(Value::Object(Object::Function(function)))?;
+    Ok(parser.emit_bytes_at(&[Opcode::Constant as u8, const_idx], function_name_location))
 }
 
 fn statement(parser: &mut Parser) -> Result<()> {
@@ -996,6 +1085,12 @@ pub enum ParseError {
     #[diagnostic(code(compiler::too_many_locals), help("this is a compiler limitation"))]
     TooManyLocalVariables {
         #[label("last variable defined here")]
+        token_span: (usize, usize),
+    },
+    #[error("too many arguments to one function or method")]
+    #[diagnostic(code(compiler::too_many_args), help("this is a compiler limitation"))]
+    TooManyArguments {
+        #[label("last argument defined here")]
         token_span: (usize, usize),
     },
     #[error("invalid assignment target on line {line}")]
