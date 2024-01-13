@@ -31,7 +31,25 @@ pub enum Opcode {
     Jump,
     JumpIfFalse,
     Loop,
+    Call,
     Return,
+}
+
+impl Opcode {
+    pub fn op_symbol(&self) -> &'static str {
+        match self {
+            Opcode::Equal => "==",
+            Opcode::Greater => ">",
+            Opcode::Less => "<",
+            Opcode::Add => "+",
+            Opcode::Subtract => "-",
+            Opcode::Multiply => "*",
+            Opcode::Divide => "/",
+            Opcode::Not => "!",
+            Opcode::Negate => "-",
+            _ => "(not an operator)",
+        }
+    }
 }
 
 #[derive(Error, Debug, Diagnostic)]

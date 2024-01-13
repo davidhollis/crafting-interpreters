@@ -60,13 +60,22 @@ fn run_repl(opts: &Salmon) -> Result<()> {
     let mut vm = salmon::vm::new();
     let mut line_number: usize = 1;
     let mut tracer = DisassemblingTracer::new();
+    let mut previous_source = String::new();
 
     loop {
         match rl.readline(&format!("salmon:{:04}> ", line_number)) {
             Ok(line) => {
                 let _ = rl.add_history_entry(&line);
-                match compile_repl(&line, line_number, &vm.strings) {
+                let full_source = previous_source.clone() + &line + "\n";
+                match compile_repl(
+                    &full_source,
+                    line_number,
+                    previous_source.len(),
+                    &vm.strings,
+                ) {
                     Ok(code) => {
+                        previous_source = full_source;
+                        line_number += 1;
                         vm = if opts.debug {
                             debug::disassemble_chunk(
                                 &format!("repl line {}", line_number),
@@ -79,11 +88,18 @@ fn run_repl(opts: &Salmon) -> Result<()> {
                         let line_result;
                         (vm, line_result) = vm.extract_result();
                         if let Err(runtime_error) = line_result {
-                            println!("{:?}", runtime_error.with_source_code(line.clone()));
+                            println!(
+                                "{:?}",
+                                runtime_error.with_source_code(previous_source.clone())
+                            );
                         }
                     }
                     Err(compile_error) => {
-                        println!("{:?}", compile_error.with_source_code(line.clone()))
+                        // TODO(hollis): If we got some kind of unexpected EOF, do some kind of continuation
+                        //     Maybe storing the current offset into the "full code", and if the current
+                        //     offset is less than previous_source.len(), it's a continuation with a different
+                        //     prompt
+                        println!("{:?}", compile_error.with_source_code(full_source.clone()))
                     }
                 }
             }
@@ -93,7 +109,5 @@ fn run_repl(opts: &Salmon) -> Result<()> {
             }
             Err(e) => return Err(e).into_diagnostic(),
         }
-
-        line_number += 1;
     }
 }

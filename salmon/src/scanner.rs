@@ -157,11 +157,17 @@ impl Scanner<'_> {
         }
     }
 
-    pub fn new_line(source: &str, line: usize) -> Scanner {
+    pub fn new_repl(source: &str, line: usize, starting_at: usize) -> Scanner {
+        let mut character_iter = source.char_indices().peekable();
+
+        if starting_at > 0 {
+            let _ = character_iter.nth(starting_at - 1);
+        }
+
         Scanner {
             source,
-            current_character: source.char_indices().peekable(),
-            current_token_start_offset: 0,
+            current_character: character_iter,
+            current_token_start_offset: starting_at,
             line,
         }
     }

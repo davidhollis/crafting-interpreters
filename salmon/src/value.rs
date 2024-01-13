@@ -61,11 +61,12 @@ impl Value {
 }
 
 impl Debug for Value {
+    // TODO(hollis): refine the debug output to be more useful
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Number(n) => write!(f, "{} (of type number)", n),
-            Self::Boolean(true) => write!(f, "true (of type boolean)"),
-            Self::Boolean(false) => write!(f, "false (of type boolean)"),
+            Self::Number(n) => write!(f, "<number {}>", n),
+            Self::Boolean(true) => write!(f, "<boolean true>"),
+            Self::Boolean(false) => write!(f, "<boolean false>"),
             Self::Object(obj) => obj.fmt(f),
             Self::Nil => write!(f, "nil"),
         }

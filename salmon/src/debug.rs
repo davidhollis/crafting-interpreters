@@ -4,17 +4,22 @@ use termcolor::{Buffer, BufferWriter, Color, ColorChoice, ColorSpec, WriteColor}
 
 use crate::{
     chunk::{Chunk, Opcode},
+    object::Object,
     value::Value,
     vm::tracing::Tracer,
 };
 
 pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
+    disassemble_chunk_indent(name, chunk, "".to_string())
+}
+
+pub fn disassemble_chunk_indent(name: &str, chunk: &Chunk, indent: String) -> Result<()> {
     let mut offset = 0usize;
     let out = BufferWriter::stdout(ColorChoice::Auto);
 
     let mut header = out.buffer();
     color(&mut header, Color::Yellow)?;
-    writeln!(header, "=== {} ===", name).into_diagnostic()?;
+    writeln!(header, "{}=== {} ===", indent, name).into_diagnostic()?;
     out.print(&header).into_diagnostic()?;
 
     while offset < chunk.len() {
@@ -23,7 +28,7 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
         // Write out the chunk offset and line number
         line.set_color(ColorSpec::new().set_fg(Some(Color::White)).set_dimmed(true))
             .into_diagnostic()?;
-        write!(line, "{:04} ", offset).into_diagnostic()?;
+        write!(line, "{}{:04} ", indent, offset).into_diagnostic()?;
         let location = chunk.location(offset)?;
         if offset > 0 && location.line == chunk.location(offset - 1)?.line {
             write!(line, "   . ").into_diagnostic()?;
@@ -44,11 +49,23 @@ pub fn disassemble_chunk(name: &str, chunk: &Chunk) -> Result<()> {
         offset = new_offset?;
     }
 
+    io::stdout().flush().into_diagnostic()?;
+    for const_id in 0..chunk.num_constants() {
+        match chunk.constant_at(const_id as u8)? {
+            Value::Object(Object::Function(inner_function)) => {
+                let name = inner_function.debug_name();
+                disassemble_chunk_indent(&name, &inner_function.chunk, indent.clone() + "    ")?;
+            }
+            _ => (),
+        }
+    }
+
     let mut footer = out.buffer();
     color(&mut footer, Color::Yellow)?;
     writeln!(
         footer,
-        "===={}====",
+        "{}===={}====",
+        indent,
         std::iter::repeat('=').take(name.len()).collect::<String>()
     )
     .into_diagnostic()?;
@@ -63,6 +80,7 @@ fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -
         Opcode::Jump => render_jump_instruction("Jump", true, offset, chunk, line),
         Opcode::JumpIfFalse => render_jump_instruction("Jump If False", true, offset, chunk, line),
         Opcode::Loop => render_jump_instruction("Loop", false, offset, chunk, line),
+        Opcode::Call => render_call_instruction("Call", offset, chunk, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
         Opcode::GetLocal => render_local_var_instruction("Get Local", offset, chunk, line),
@@ -124,6 +142,22 @@ fn render_local_var_instruction(
     writeln!(line, "  0x{:02x} ", stack_idx).into_diagnostic()?;
 
     // TODO(hollis): find a way to represent debugging symbols so we can include a local variable name here
+
+    Ok(offset + 2)
+}
+
+fn render_call_instruction(
+    instr_name: &str,
+    offset: usize,
+    chunk: &Chunk,
+    line: &mut Buffer,
+) -> Result<usize> {
+    color(line, Color::Green)?;
+    write!(line, "{:-16}", instr_name).into_diagnostic()?;
+
+    let arg_count = *chunk.byte(offset + 1)?;
+    color(line, Color::White)?;
+    writeln!(line, "  /{} ", arg_count).into_diagnostic()?;
 
     Ok(offset + 2)
 }

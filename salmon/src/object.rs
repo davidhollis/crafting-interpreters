@@ -40,7 +40,7 @@ impl Object {
 impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Object::String(data) => write!(f, r#""{}" (of type string)"#, data.contents),
+            Object::String(data) => write!(f, r#"<string "{}">"#, data.contents),
             Object::Function(_) => write!(f, "{}", self.show()),
         }
     }
@@ -127,5 +127,12 @@ impl FunctionData {
 
     pub fn finalize(self) -> Arc<FunctionData> {
         Arc::new(self)
+    }
+
+    pub fn debug_name(&self) -> String {
+        match &self.name {
+            Some(name_data) => name_data.to_string(),
+            None => "<anonymous function>".to_string(),
+        }
     }
 }

@@ -1,6 +1,6 @@
 use std::{sync::Arc, u8};
 
-use miette::{Diagnostic, Result};
+use miette::{Context, Diagnostic, Result};
 use thiserror::Error;
 
 use crate::{
@@ -34,6 +34,17 @@ struct CallFrame {
     function: Arc<FunctionData>,
     ip: usize,
     stack_offset: usize,
+}
+
+impl CallFrame {
+    fn trace_line(&self) -> TraceLine {
+        let location = self.function.chunk.location(self.ip - 1).unwrap();
+        TraceLine {
+            function_name: self.function.debug_name(),
+            span: location.span,
+            line: location.line,
+        }
+    }
 }
 
 struct FrameView<'a> {
@@ -221,6 +232,12 @@ impl VM<Running> {
                 frame.jump_backward(distance as usize);
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::Call => {
+                let arg_count = frame.next_byte()?;
+                let function = frame.peek(arg_count as usize);
+                self.call_value(function, arg_count)?;
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Return => Ok(RuntimeAction::Halt),
             Opcode::Pop => {
                 let _ = frame.pop()?;
@@ -246,11 +263,9 @@ impl VM<Running> {
                         frame.push(value)?;
                         Ok(RuntimeAction::Continue)
                     } else {
-                        let location = frame.previous_opcode_location()?;
                         Err(RuntimeError::UndefinedVariable {
                             name: global_name.print(),
-                            span: location.span,
-                            line: location.line,
+                            span: frame.previous_opcode_location()?.span,
                         }
                         .into())
                     }
@@ -288,11 +303,9 @@ impl VM<Running> {
                         // take it back out and return an error
                         frame.globals.delete(&name_ref);
 
-                        let location = frame.previous_opcode_location()?;
                         Err(RuntimeError::UndefinedVariable {
                             name: name_ref.to_string(),
-                            span: location.span,
-                            line: location.line,
+                            span: frame.previous_opcode_location()?.span,
                         }
                         .into())
                     } else {
@@ -359,13 +372,11 @@ impl VM<Running> {
                         .into())
                     }
                 } else {
-                    let opcode_location = frame.previous_opcode_location()?;
                     Err(RuntimeError::TypeErrorBinary {
-                        operator: Opcode::Add,
+                        op_symbol: Opcode::Add.op_symbol(),
                         lvalue: left_view,
                         rvalue: right_view,
-                        span: opcode_location.span,
-                        line: opcode_location.line,
+                        span: frame.previous_opcode_location()?.span,
                     }
                     .into())
                 }
@@ -399,16 +410,12 @@ impl VM<Running> {
                     frame.push(Value::Number(-v))?;
                     Ok(RuntimeAction::Continue)
                 }
-                bad_value => {
-                    let operator_location = frame.previous_opcode_location()?;
-                    Err(RuntimeError::TypeErrorUnary {
-                        operator: Opcode::Negate,
-                        value: bad_value.clone(),
-                        span: operator_location.span,
-                        line: operator_location.line,
-                    }
-                    .into())
+                bad_value => Err(RuntimeError::TypeErrorUnary {
+                    op_symbol: Opcode::Negate.op_symbol(),
+                    value: bad_value.clone(),
+                    span: frame.previous_opcode_location()?.span,
                 }
+                .into()),
             },
             Opcode::Constant => {
                 let const_idx = frame.next_byte()?;
@@ -442,6 +449,49 @@ impl VM<Running> {
         }
     }
 
+    fn call_value(&mut self, value: Value, arg_count: u8) -> Result<()> {
+        match value {
+            Value::Object(Object::Function(function)) => self.call_function(function, arg_count),
+            _ => {
+                let call_location = self
+                    .current_frame_view()
+                    .previous_opcode_location()?
+                    .clone();
+                Err(RuntimeError::BadCall {
+                    value,
+                    call_span: call_location.span,
+                }
+                .into())
+            }
+        }
+    }
+
+    fn call_function(&mut self, function: Arc<FunctionData>, arg_count: u8) -> Result<()> {
+        if function.arity != arg_count as usize {
+            return Err(RuntimeError::WrongNumberOfArguments {
+                name: function.debug_name(),
+                got: arg_count,
+                expected: function.arity,
+                call_span: self.current_frame_view().previous_opcode_location()?.span,
+            }
+            .into());
+        }
+
+        if self.state.frames.len() == MAX_FRAME_COUNT {
+            return Err(RuntimeError::StackOverflow {
+                span: self.current_frame_view().previous_opcode_location()?.span,
+            }
+            .into());
+        }
+
+        let new_frame = CallFrame {
+            function,
+            ip: 0,
+            stack_offset: self.state.stack_offset - (arg_count as usize) - 1,
+        };
+        Ok(self.state.frames.push(new_frame))
+    }
+
     fn next_opcode(&mut self) -> Result<Opcode> {
         let current_frame = self.state.frames.last_mut().unwrap();
         let current_byte = current_frame.function.chunk.byte(current_frame.ip)?;
@@ -450,8 +500,16 @@ impl VM<Running> {
     }
 
     fn halt(self, result: Result<()>) -> VM<Stopped> {
+        let mut wrapped_result = result;
+
+        for frame in self.state.frames.iter().rev() {
+            wrapped_result = wrapped_result.context(frame.trace_line());
+        }
+
         VM {
-            state: Stopped { result },
+            state: Stopped {
+                result: wrapped_result.context("Runtime Error"),
+            },
             strings: self.strings,
             globals: self.globals,
         }
@@ -469,13 +527,11 @@ where
             frame.push(op(left, right))
         }
         (bad_right, bad_left) => {
-            let operator_location = frame.previous_opcode_location()?;
             return Err(RuntimeError::TypeErrorBinary {
-                operator: opcode,
+                op_symbol: opcode.op_symbol(),
                 lvalue: bad_left.clone(),
                 rvalue: bad_right.clone(),
-                span: operator_location.span,
-                line: operator_location.line,
+                span: frame.previous_opcode_location()?.span,
             }
             .into());
         }
@@ -531,24 +587,24 @@ impl VM<Stopped> {
 
 #[derive(Error, Debug, Diagnostic)]
 pub enum RuntimeError {
-    #[error("type error on line {line}: cannot apply operator {operator:?} to value: {value:?}")]
+    #[error("type error: cannot apply unary operator '{op_symbol}' to value: {value:?}")]
     #[diagnostic(code(runtime::type_error))]
     TypeErrorUnary {
-        operator: Opcode,
+        op_symbol: &'static str,
         value: Value,
         #[label("here")]
         span: (usize, usize),
-        line: usize,
     },
-    #[error("type error on line {line}: cannot apply operator {operator:?} to values: {lvalue:?} and {rvalue:?}")]
+    #[error(
+        "type error: cannot apply operator '{op_symbol}' to values: {lvalue:?} and {rvalue:?}"
+    )]
     #[diagnostic(code(runtime::type_error))]
     TypeErrorBinary {
-        operator: Opcode,
+        op_symbol: &'static str,
         lvalue: Value,
         rvalue: Value,
         #[label("here")]
         span: (usize, usize),
-        line: usize,
     },
     #[error("attempted to pop value from empty stack")]
     #[diagnostic(
@@ -568,7 +624,7 @@ pub enum RuntimeError {
         #[label("occurred here")]
         span: (usize, usize),
     },
-    #[error("undefined variable '{name}' on line {line}")]
+    #[error("undefined variable '{name}'")]
     #[diagnostic(
         code(runtime::undefined_variable),
         help("variables must be declared before use")
@@ -577,7 +633,25 @@ pub enum RuntimeError {
         name: String,
         #[label("referenced here")]
         span: (usize, usize),
-        line: usize,
+    },
+    #[error("attempted to call uncallable value {value:?}")]
+    #[diagnostic(
+        code(runtime::bad_call),
+        help("only functions, methods, and classes are callable")
+    )]
+    BadCall {
+        value: Value,
+        #[label("call site")]
+        call_span: (usize, usize),
+    },
+    #[error("attempted to call '{name}' with the wrong number of arguments (got {got}; expected {expected})")]
+    #[diagnostic(code(runtime::wrong_number_of_arguments))]
+    WrongNumberOfArguments {
+        name: String,
+        got: u8,
+        expected: usize,
+        #[label("call site")]
+        call_span: (usize, usize),
     },
     #[error("bug in VM: {message}")]
     #[diagnostic(code(runtime::internal::bug))]
@@ -586,6 +660,16 @@ pub enum RuntimeError {
         #[label("here-ish")]
         span: (usize, usize),
     },
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("in {function_name} on line {line}")]
+#[diagnostic()]
+pub struct TraceLine {
+    function_name: String,
+    #[label]
+    span: (usize, usize),
+    line: usize,
 }
 
 pub mod tracing {

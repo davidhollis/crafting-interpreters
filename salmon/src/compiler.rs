@@ -22,11 +22,13 @@ pub fn compile(source_code: &str) -> Result<Arc<FunctionData>> {
 pub fn compile_repl(
     source_code: &str,
     line: usize,
+    starting_at: usize,
     vm_strings: &Table,
 ) -> Result<Arc<FunctionData>> {
-    // TODO(hollis): We should handle "unexpected EOF" differently here, preserving the parser
-    //               state so that we can continue parsing across another line.
-    let mut parser = Parser::new_with_strings(Scanner::new_line(source_code, line), vm_strings);
+    let mut parser = Parser::new_with_strings(
+        Scanner::new_repl(source_code, line, starting_at),
+        vm_strings,
+    );
 
     parser.parse();
     parser.finalize()
@@ -815,6 +817,38 @@ fn grouping(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     Ok(())
 }
 
+fn call(parser: &mut Parser, _can_assign: bool) -> Result<()> {
+    let open_paren_location = parser.previous.location();
+    let arg_count = argument_list(parser)?;
+    Ok(parser.emit_bytes_at(&[Opcode::Call as u8, arg_count], open_paren_location))
+}
+
+fn argument_list(parser: &mut Parser) -> Result<u8> {
+    let mut arg_count = 0;
+    if !parser.check_token(TokenType::RightParen) {
+        loop {
+            expression(parser)?;
+            if arg_count == u8::MAX {
+                return Err(ParseError::TooManyArguments {
+                    token_span: parser.previous.error_span(),
+                }
+                .into());
+            }
+            arg_count += 1;
+            if !parser.match_token(TokenType::Comma) {
+                break;
+            }
+        }
+    }
+
+    parser.consume(
+        TokenType::RightParen,
+        "expected a ')' after the argument list in a call expression",
+    )?;
+
+    Ok(arg_count)
+}
+
 fn unary_op(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     let operator_type = parser.previous.tpe;
     let operator_location = parser.previous.location();
@@ -975,7 +1009,7 @@ impl ParseRule {
 #[rustfmt::skip]
 const RULES: [ParseRule; 39] = [
     // TokenType::LeftParen
-    ParseRule { prefix: Some(grouping), infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(grouping), infix: Some(call), precedence: Precedence::Call },
     // TokenType::RightParen
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::LeftBrace

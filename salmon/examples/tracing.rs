@@ -1,14 +1,16 @@
 use miette::Result;
 use salmon::{
-    chunk::{Chunk, Opcode},
+    chunk::Opcode,
     debug::DisassemblingTracer,
+    object::FunctionData,
     scanner::SourceLocation,
     value::Value,
     vm::{self},
 };
 
 fn main() -> Result<()> {
-    let mut test_chunk = Chunk::new();
+    let mut test_function = FunctionData::undefined();
+    let test_chunk = &mut test_function.chunk;
 
     let const1_idx = test_chunk.add_constant(Value::Number(1.2));
     let const2_idx = test_chunk.add_constant(Value::Number(3.4));
@@ -95,6 +97,6 @@ fn main() -> Result<()> {
     let mut tracer = DisassemblingTracer::new();
 
     let vm = vm::new();
-    let vm = vm.trace(&test_chunk, &mut tracer);
+    let vm = vm.trace(test_function.finalize(), &mut tracer);
     vm.finish()
 }
