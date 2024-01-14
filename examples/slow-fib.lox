@@ -4,6 +4,10 @@ fun fib(n) {
 }
 
 var before = clock();
-print "fib(40) == " + fib(40);
+print "fib(35) == "; print fib(35);
 var after = clock();
-print "// This took " + (after - before) + " seconds to calculate."
+print "/*";
+print "This took";
+print (after - before);
+print "seconds to calculate.";
+print "*/";

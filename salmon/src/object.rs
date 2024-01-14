@@ -1,11 +1,13 @@
+use miette::Result;
 use std::{fmt::Debug, sync::Arc};
 
-use crate::{chunk::Chunk, table::Table};
+use crate::{chunk::Chunk, table::Table, value::Value};
 
 #[derive(Clone)]
 pub enum Object {
     String(Arc<StringData>),
     Function(Arc<FunctionData>),
+    Native(Arc<NativeData>),
 }
 
 impl Object {
@@ -26,13 +28,14 @@ impl Object {
                     arity, name: None, ..
                 } => format!("<anonymous fn/{}>", arity),
             },
+            Object::Native(data) => format!("<native fn {}>", data.name.to_string()),
         }
     }
 
     pub fn print(&self) -> String {
         match self {
             Object::String(data) => data.contents.to_string(),
-            Object::Function(_) => self.show(),
+            Object::Function(_) | Object::Native(_) => self.show(),
         }
     }
 }
@@ -41,7 +44,7 @@ impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Object::String(data) => write!(f, r#"<string "{}">"#, data.contents),
-            Object::Function(_) => write!(f, "{}", self.show()),
+            Object::Function(_) | Object::Native(_) => write!(f, "{}", self.show()),
         }
     }
 }
@@ -134,5 +137,18 @@ impl FunctionData {
             Some(name_data) => name_data.to_string(),
             None => "<anonymous function>".to_string(),
         }
+    }
+}
+
+pub type NativeFn = fn(usize, &[Value]) -> Result<Value>;
+
+pub struct NativeData {
+    name: Arc<StringData>,
+    pub function: NativeFn,
+}
+
+impl NativeData {
+    pub fn new(name: Arc<StringData>, function: NativeFn) -> Arc<NativeData> {
+        Arc::new(NativeData { name, function })
     }
 }

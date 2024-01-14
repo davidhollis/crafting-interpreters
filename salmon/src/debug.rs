@@ -211,9 +211,15 @@ impl Tracer for DisassemblingTracer {
     fn enter_instruction(&mut self, chunk: &Chunk, offset: usize, stack: Vec<&Value>) -> () {
         color(&mut self.line_buffer, Color::Magenta).unwrap();
         if stack.is_empty() {
-            write!(self.line_buffer, "ø").unwrap();
+            write!(self.line_buffer, "[]").unwrap();
         } else {
             for v in stack {
+                if let Value::Object(Object::Function(function_data)) = v {
+                    if function_data.debug_name() == "<toplevel>" {
+                        write!(self.line_buffer, "[]").unwrap();
+                        continue;
+                    }
+                }
                 write!(self.line_buffer, "[ {} ]", v.show()).unwrap();
             }
         }

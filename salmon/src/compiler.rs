@@ -12,8 +12,8 @@ use crate::{
     vm,
 };
 
-pub fn compile(source_code: &str) -> Result<Arc<FunctionData>> {
-    let mut parser = Parser::new(Scanner::new(source_code));
+pub fn compile(source_code: &str, vm_strings: &Table) -> Result<Arc<FunctionData>> {
+    let mut parser = Parser::new_with_strings(Scanner::new(source_code), vm_strings);
 
     parser.parse();
     parser.finalize()
@@ -39,6 +39,7 @@ struct LocalVariable<'a> {
     depth: Option<u8>,
 }
 
+#[derive(PartialEq, Eq)]
 enum UnitType {
     Function,
     Script,
@@ -99,6 +100,7 @@ impl<'a> CompilerState<'a> {
     ) -> (CompilerState<'a>, Arc<FunctionData>) {
         self.compilation_unit
             .chunk
+            .write_byte(Opcode::Nil as u8, source_location.clone())
             .write_byte(Opcode::Return as u8, source_location);
         let finished_function = self.compilation_unit.finalize();
         let parent = self
@@ -121,18 +123,6 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(scanner: Scanner<'a>) -> Parser<'a> {
-        Parser {
-            scanner,
-            previous: Token::empty(),
-            current: Token::empty(),
-            compiler: CompilerState::new_toplevel(UnitType::Script),
-            strings: Table::new(),
-            errors: vec![],
-            panic_mode: false,
-        }
-    }
-
     fn new_with_strings(scanner: Scanner<'a>, preloaded_strings: &Table) -> Parser<'a> {
         let mut strings = Table::new();
         strings.add_all(preloaded_strings);
@@ -468,7 +458,7 @@ fn var_declaration(parser: &mut Parser) -> Result<()> {
 
     parser.consume(
         TokenType::Semicolon,
-        "expected a semicolon at the end of a var declaration",
+        "expected a ';' at the end of a var declaration",
     )?;
 
     if parser.is_global_scope() {
@@ -580,6 +570,8 @@ fn statement(parser: &mut Parser) -> Result<()> {
         print_statement(parser)
     } else if parser.match_token(TokenType::If) {
         if_statement(parser)
+    } else if parser.match_token(TokenType::Return) {
+        return_statement(parser)
     } else if parser.match_token(TokenType::While) {
         while_statement(parser)
     } else if parser.match_token(TokenType::For) {
@@ -599,7 +591,7 @@ fn print_statement(parser: &mut Parser) -> Result<()> {
     expression(parser)?;
     parser.consume(
         TokenType::Semicolon,
-        "expected a semicolon at the end of a print statement",
+        "expected a ';' at the end of a print statement",
     )?;
     parser.emit_byte_at(Opcode::Print as u8, print_location);
     Ok(())
@@ -627,6 +619,27 @@ fn if_statement(parser: &mut Parser) -> Result<()> {
     }
 
     parser.patch_jump(else_jump_offset)
+}
+
+fn return_statement(parser: &mut Parser) -> Result<()> {
+    if parser.compiler.unit_type == UnitType::Script {
+        return Err(ParseError::BadReturn {
+            bad_return_span: parser.previous.error_span(),
+        }
+        .into());
+    }
+
+    if parser.match_token(TokenType::Semicolon) {
+        Ok(parser.emit_bytes(&[Opcode::Nil as u8, Opcode::Return as u8]))
+    } else {
+        let return_location = parser.previous.location();
+        expression(parser)?;
+        parser.consume(
+            TokenType::Semicolon,
+            "expected a ';' at the end of a return statement",
+        )?;
+        Ok(parser.emit_byte_at(Opcode::Return as u8, return_location))
+    }
 }
 
 fn while_statement(parser: &mut Parser) -> Result<()> {
@@ -729,7 +742,7 @@ fn expression_statement(parser: &mut Parser) -> Result<()> {
     expression(parser)?;
     parser.consume(
         TokenType::Semicolon,
-        "expected a semicolon at the end of an expression statement",
+        "expected a ';' at the end of an expression statement",
     )?;
     parser.emit_byte(Opcode::Pop as u8);
     Ok(())
@@ -1168,6 +1181,15 @@ pub enum ParseError {
     )]
     JumpTooLong {
         approx_jump_location: (usize, usize),
+    },
+    #[error("attempted to return from a toplevel scope")]
+    #[diagnostic(
+        code(compiler::bad_return),
+        help("Return statements are only valid with function or method bodies.")
+    )]
+    BadReturn {
+        #[label("here")]
+        bad_return_span: (usize, usize),
     },
     #[error("failed to produce bytecode due to the following error(s)")]
     #[diagnostic(code(compiler::no_bytecode))]

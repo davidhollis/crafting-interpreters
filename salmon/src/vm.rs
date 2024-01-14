@@ -1,11 +1,11 @@
 use std::{sync::Arc, u8};
 
-use miette::{Context, Diagnostic, Result};
+use miette::{Context, Diagnostic, Report, Result};
 use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
-    object::{FunctionData, Object},
+    object::{FunctionData, NativeData, NativeFn, Object},
     scanner::SourceLocation,
     table::Table,
     value::{DataType, Value},
@@ -27,6 +27,17 @@ pub fn new() -> VM<Stopped> {
         state: Stopped { result: Ok(()) },
         strings: Table::new(),
         globals: Table::new(),
+    }
+}
+
+impl<T: VMState> VM<T> {
+    pub fn register_native(&mut self, name: &str, function: NativeFn) -> () {
+        let function_name = self.strings.intern_string(name);
+        let function_value = Value::Object(Object::Native(NativeData::new(
+            Arc::clone(&function_name),
+            function,
+        )));
+        let _ = self.globals.set(function_name, function_value);
     }
 }
 
@@ -238,7 +249,16 @@ impl VM<Running> {
                 self.call_value(function, arg_count)?;
                 Ok(RuntimeAction::Continue)
             }
-            Opcode::Return => Ok(RuntimeAction::Halt),
+            Opcode::Return => {
+                let return_value = frame.pop()?;
+                self.pop_frame()?;
+                if self.has_frames_remaining() {
+                    self.current_frame_view().push(return_value)?;
+                    Ok(RuntimeAction::Continue)
+                } else {
+                    Ok(RuntimeAction::Halt)
+                }
+            }
             Opcode::Pop => {
                 let _ = frame.pop()?;
                 Ok(RuntimeAction::Continue)
@@ -449,9 +469,44 @@ impl VM<Running> {
         }
     }
 
+    fn pop_frame(&mut self) -> Result<()> {
+        let popped_frame =
+            self.state.frames.pop().ok_or_else(|| {
+                Into::<Report>::into(RuntimeError::StackUnderflow { span: (0, 0) })
+            })?;
+
+        // Pop the function and its arguments from the stack.
+        while self.state.stack_offset > popped_frame.stack_offset {
+            self.state.stack_offset -= 1;
+            self.state.stack[self.state.stack_offset] = Value::Nil;
+        }
+
+        Ok(())
+    }
+
+    fn has_frames_remaining(&self) -> bool {
+        !self.state.frames.is_empty()
+    }
+
     fn call_value(&mut self, value: Value, arg_count: u8) -> Result<()> {
         match value {
             Value::Object(Object::Function(function)) => self.call_function(function, arg_count),
+            Value::Object(Object::Native(native)) => {
+                let arg_count = arg_count as usize;
+                let native_frame_offset = self.state.stack_offset - arg_count - 1;
+                let args = &self.state.stack[(native_frame_offset + 1)..self.state.stack_offset];
+                let return_value = (native.function)(arg_count, args)?;
+
+                while self.state.stack_offset > native_frame_offset {
+                    self.state.stack_offset -= 1;
+                    self.state.stack[self.state.stack_offset] = Value::Nil;
+                }
+
+                self.state.stack[self.state.stack_offset] = return_value;
+                self.state.stack_offset += 1;
+
+                Ok(())
+            }
             _ => {
                 let call_location = self
                     .current_frame_view()

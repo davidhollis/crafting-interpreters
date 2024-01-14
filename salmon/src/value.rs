@@ -8,6 +8,7 @@ pub enum DataType {
     Boolean,
     String,
     Function,
+    NativeFunction,
     Nil,
 }
 
@@ -55,13 +56,13 @@ impl Value {
             Value::Boolean(_) => data_type == DataType::Boolean,
             Value::Object(Object::String(_)) => data_type == DataType::String,
             Value::Object(Object::Function(_)) => data_type == DataType::Function,
+            Value::Object(Object::Native(_)) => data_type == DataType::NativeFunction,
             Value::Nil => data_type == DataType::Nil,
         }
     }
 }
 
 impl Debug for Value {
-    // TODO(hollis): refine the debug output to be more useful
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Number(n) => write!(f, "<number {}>", n),

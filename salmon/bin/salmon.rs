@@ -6,6 +6,8 @@ use rustyline::error::ReadlineError;
 use salmon::{
     compiler::{compile, compile_repl},
     debug::{self, DisassemblingTracer},
+    native,
+    vm::{Stopped, VM},
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -38,9 +40,10 @@ fn run_file(path: &PathBuf, opts: &Salmon) -> Result<()> {
         .and_then(|osstr| osstr.to_str())
         .unwrap_or("input file");
     let script_file = fs::read_to_string(path.clone()).into_diagnostic()?;
-    let bytecode = compile(&script_file)
+    let mut vm = salmon::vm::new();
+    install_stdlib(&mut vm);
+    let bytecode = compile(&script_file, &vm.strings)
         .map_err(|err| err.with_source_code(NamedSource::new(file_name, script_file.clone())))?;
-    let vm = salmon::vm::new();
 
     let vm = if opts.debug {
         debug::disassemble_chunk(file_name, &bytecode.chunk)?;
@@ -61,6 +64,8 @@ fn run_repl(opts: &Salmon) -> Result<()> {
     let mut line_number: usize = 1;
     let mut tracer = DisassemblingTracer::new();
     let mut previous_source = String::new();
+
+    install_stdlib(&mut vm);
 
     loop {
         match rl.readline(&format!("salmon:{:04}> ", line_number)) {
@@ -110,4 +115,8 @@ fn run_repl(opts: &Salmon) -> Result<()> {
             Err(e) => return Err(e).into_diagnostic(),
         }
     }
+}
+
+fn install_stdlib(vm: &mut VM<Stopped>) -> () {
+    vm.register_native("clock", native::clock);
 }
