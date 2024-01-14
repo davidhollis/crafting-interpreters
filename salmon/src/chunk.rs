@@ -84,14 +84,14 @@ impl Chunk {
     pub fn byte(&self, offset: usize) -> Result<&u8> {
         self.code
             .get(offset)
-            .ok_or(ChunkError::InvalidOffset(offset).into())
+            .ok_or_else(|| ChunkError::InvalidOffset(offset).into())
     }
 
     pub fn patch(&mut self, offset: usize, new_value: u8) -> Result<()> {
         let patched_address = self
             .code
             .get_mut(offset)
-            .ok_or::<ErrReport>(ChunkError::InvalidOffset(offset).into())?;
+            .ok_or_else(|| Into::<ErrReport>::into(ChunkError::InvalidOffset(offset)))?;
         *patched_address = new_value;
         Ok(())
     }
@@ -99,7 +99,7 @@ impl Chunk {
     pub fn location(&self, offset: usize) -> Result<&SourceLocation> {
         self.locations
             .get(offset)
-            .ok_or(ChunkError::InvalidOffset(offset).into())
+            .ok_or_else(|| ChunkError::InvalidOffset(offset).into())
     }
 
     pub fn len(&self) -> usize {
@@ -114,7 +114,7 @@ impl Chunk {
     pub fn constant_at(&self, index: u8) -> Result<&Value> {
         self.constants
             .get(Into::<usize>::into(index))
-            .ok_or(ChunkError::NoSuchConstant(index).into())
+            .ok_or_else(|| ChunkError::NoSuchConstant(index).into())
     }
 
     pub fn num_constants(&self) -> usize {
