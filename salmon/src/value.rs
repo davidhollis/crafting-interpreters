@@ -9,6 +9,7 @@ pub enum DataType {
     String,
     Function,
     NativeFunction,
+    Closure,
     Nil,
 }
 
@@ -57,6 +58,7 @@ impl Value {
             Value::Object(Object::String(_)) => data_type == DataType::String,
             Value::Object(Object::Function(_)) => data_type == DataType::Function,
             Value::Object(Object::Native(_)) => data_type == DataType::NativeFunction,
+            Value::Object(Object::Closure(_)) => data_type == DataType::Closure,
             Value::Nil => data_type == DataType::Nil,
         }
     }

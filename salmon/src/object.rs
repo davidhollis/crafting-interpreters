@@ -8,11 +8,16 @@ pub enum Object {
     String(Arc<StringData>),
     Function(Arc<FunctionData>),
     Native(Arc<NativeData>),
+    Closure(Arc<ClosureData>),
 }
 
 impl Object {
     pub fn string(contents: &str) -> Object {
         Object::String(StringData::new(contents))
+    }
+
+    pub fn closure(function: &Arc<FunctionData>) -> Object {
+        Object::Closure(ClosureData::new(Arc::clone(function)))
     }
 
     pub fn show(&self) -> String {
@@ -29,6 +34,7 @@ impl Object {
                 } => format!("<anonymous fn/{}>", arity),
             },
             Object::Native(data) => format!("<native fn {}>", data.name.to_string()),
+            Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
         }
     }
 
@@ -36,6 +42,7 @@ impl Object {
         match self {
             Object::String(data) => data.contents.to_string(),
             Object::Function(_) | Object::Native(_) => self.show(),
+            Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
         }
     }
 }
@@ -45,6 +52,9 @@ impl Debug for Object {
         match self {
             Object::String(data) => write!(f, r#"<string "{}">"#, data.contents),
             Object::Function(_) | Object::Native(_) => write!(f, "{}", self.show()),
+            Object::Closure(data) => {
+                write!(f, "{}", Object::Function(Arc::clone(&data.function)).show())
+            }
         }
     }
 }
@@ -56,6 +66,12 @@ impl PartialEq for Object {
                 Arc::ptr_eq(this_data, other_data)
             }
             (Object::Function(this_data), Object::Function(other_data)) => {
+                Arc::ptr_eq(this_data, other_data)
+            }
+            (Object::Native(this_data), Object::Native(other_data)) => {
+                Arc::ptr_eq(this_data, other_data)
+            }
+            (Object::Closure(this_data), Object::Closure(other_data)) => {
                 Arc::ptr_eq(this_data, other_data)
             }
             _ => false,
@@ -150,5 +166,15 @@ pub struct NativeData {
 impl NativeData {
     pub fn new(name: Arc<StringData>, function: NativeFn) -> Arc<NativeData> {
         Arc::new(NativeData { name, function })
+    }
+}
+
+pub struct ClosureData {
+    pub function: Arc<FunctionData>,
+}
+
+impl ClosureData {
+    pub fn new(function: Arc<FunctionData>) -> Arc<ClosureData> {
+        Arc::new(ClosureData { function })
     }
 }

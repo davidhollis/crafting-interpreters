@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
-    object::{FunctionData, NativeData, NativeFn, Object},
+    object::{ClosureData, FunctionData, NativeData, NativeFn, Object},
     scanner::SourceLocation,
     table::Table,
     value::{DataType, Value},
@@ -42,16 +42,16 @@ impl<T: VMState> VM<T> {
 }
 
 struct CallFrame {
-    function: Arc<FunctionData>,
+    closure: Arc<ClosureData>,
     ip: usize,
     stack_offset: usize,
 }
 
 impl CallFrame {
     fn trace_line(&self) -> TraceLine {
-        let location = self.function.chunk.location(self.ip - 1).unwrap();
+        let location = self.closure.function.chunk.location(self.ip - 1).unwrap();
         TraceLine {
-            function_name: self.function.debug_name(),
+            function_name: self.closure.function.debug_name(),
             span: location.span,
             line: location.line,
         }
@@ -68,25 +68,29 @@ struct FrameView<'a> {
 
 impl<'a> FrameView<'a> {
     fn chunk(&'a self) -> &'a Chunk {
-        &self.frame.function.chunk
+        &self.frame.closure.function.chunk
     }
 
     fn next_byte(&mut self) -> Result<u8> {
-        let current_byte = self.frame.function.chunk.byte(self.frame.ip)?;
+        let current_byte = self.frame.closure.function.chunk.byte(self.frame.ip)?;
         self.frame.ip += 1;
         Ok(*current_byte)
     }
 
     fn next_u16(&mut self) -> Result<u16> {
-        let high_byte = self.frame.function.chunk.byte(self.frame.ip)?;
-        let low_byte = self.frame.function.chunk.byte(self.frame.ip + 1)?;
+        let high_byte = self.frame.closure.function.chunk.byte(self.frame.ip)?;
+        let low_byte = self.frame.closure.function.chunk.byte(self.frame.ip + 1)?;
         self.frame.ip += 2;
 
         Ok(((*high_byte as u16) << 8) | (*low_byte as u16))
     }
 
     fn previous_opcode_location(&self) -> Result<&SourceLocation> {
-        self.frame.function.chunk.location(self.frame.ip - 1)
+        self.frame
+            .closure
+            .function
+            .chunk
+            .location(self.frame.ip - 1)
     }
 
     fn jump_forward(&mut self, distance: usize) -> () {
@@ -167,7 +171,7 @@ impl Running {
         running_state.stack_offset += 1;
 
         let toplevel_frame = CallFrame {
-            function: toplevel_function,
+            closure: ClosureData::new(toplevel_function),
             ip: 0,
             stack_offset: 0,
         };
@@ -196,7 +200,7 @@ impl VM<Running> {
         loop {
             let frame = self.current_frame();
             tracer.enter_instruction(
-                &frame.function.chunk,
+                &frame.closure.function.chunk,
                 frame.ip,
                 self.state
                     .stack
@@ -247,6 +251,23 @@ impl VM<Running> {
                 let arg_count = frame.next_byte()?;
                 let function = frame.peek(arg_count as usize);
                 self.call_value(function, arg_count)?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Closure => {
+                let const_idx = frame.next_byte()?;
+                match frame.chunk().constant_at(const_idx)? {
+                    Value::Object(Object::Function(function)) => {
+                        frame.push(Value::Object(Object::closure(function)))?;
+                    }
+                    v => {
+                        return Err(RuntimeError::TypeErrorUnary {
+                            op_symbol: "<closure>",
+                            value: v.clone(),
+                            span: frame.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                }
                 Ok(RuntimeAction::Continue)
             }
             Opcode::Return => {
@@ -490,7 +511,7 @@ impl VM<Running> {
 
     fn call_value(&mut self, value: Value, arg_count: u8) -> Result<()> {
         match value {
-            Value::Object(Object::Function(function)) => self.call_function(function, arg_count),
+            Value::Object(Object::Closure(closure)) => self.call_function(closure, arg_count),
             Value::Object(Object::Native(native)) => {
                 let arg_count = arg_count as usize;
                 let native_frame_offset = self.state.stack_offset - arg_count - 1;
@@ -521,12 +542,12 @@ impl VM<Running> {
         }
     }
 
-    fn call_function(&mut self, function: Arc<FunctionData>, arg_count: u8) -> Result<()> {
-        if function.arity != arg_count as usize {
+    fn call_function(&mut self, closure: Arc<ClosureData>, arg_count: u8) -> Result<()> {
+        if closure.function.arity != arg_count as usize {
             return Err(RuntimeError::WrongNumberOfArguments {
-                name: function.debug_name(),
+                name: closure.function.debug_name(),
                 got: arg_count,
-                expected: function.arity,
+                expected: closure.function.arity,
                 call_span: self.current_frame_view().previous_opcode_location()?.span,
             }
             .into());
@@ -540,7 +561,7 @@ impl VM<Running> {
         }
 
         let new_frame = CallFrame {
-            function,
+            closure,
             ip: 0,
             stack_offset: self.state.stack_offset - (arg_count as usize) - 1,
         };
@@ -549,7 +570,11 @@ impl VM<Running> {
 
     fn next_opcode(&mut self) -> Result<Opcode> {
         let current_frame = self.state.frames.last_mut().unwrap();
-        let current_byte = current_frame.function.chunk.byte(current_frame.ip)?;
+        let current_byte = current_frame
+            .closure
+            .function
+            .chunk
+            .byte(current_frame.ip)?;
         current_frame.ip += 1;
         (*current_byte).try_into()
     }

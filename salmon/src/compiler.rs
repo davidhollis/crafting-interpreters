@@ -562,7 +562,7 @@ fn build_function(parser: &mut Parser, unit_type: UnitType) -> Result<()> {
 
     let function = parser.finish_compilation_unit(parser.previous.location());
     let const_idx = parser.make_constant(Value::Object(Object::Function(function)))?;
-    Ok(parser.emit_bytes_at(&[Opcode::Constant as u8, const_idx], function_name_location))
+    Ok(parser.emit_bytes_at(&[Opcode::Closure as u8, const_idx], function_name_location))
 }
 
 fn statement(parser: &mut Parser) -> Result<()> {
