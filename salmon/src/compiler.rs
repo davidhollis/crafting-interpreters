@@ -45,12 +45,24 @@ enum UnitType {
     Script,
 }
 
+struct Upvalue {
+    index: u8,
+    is_local: bool,
+}
+
+impl Upvalue {
+    fn matches(&self, index: u8, is_local: bool) -> bool {
+        self.index == index && self.is_local == is_local
+    }
+}
+
 struct CompilerState<'a> {
     enclosing: Option<Box<CompilerState<'a>>>,
     compilation_unit: FunctionData,
     unit_type: UnitType,
     locals: Vec<LocalVariable<'a>>,
     scope_depth: u8,
+    upvalues: Vec<Upvalue>,
 }
 
 impl<'a> CompilerState<'a> {
@@ -66,6 +78,7 @@ impl<'a> CompilerState<'a> {
                 depth: Some(0),
             }],
             scope_depth: 0,
+            upvalues: vec![],
         }
     }
 
@@ -76,6 +89,7 @@ impl<'a> CompilerState<'a> {
             unit_type: UnitType::Script,
             locals: vec![],
             scope_depth: 0,
+            upvalues: vec![],
         }
     }
 
@@ -91,13 +105,14 @@ impl<'a> CompilerState<'a> {
                 depth: Some(0),
             }],
             scope_depth: 0,
+            upvalues: vec![],
         }
     }
 
     fn finalize(
         mut self,
         source_location: SourceLocation,
-    ) -> (CompilerState<'a>, Arc<FunctionData>) {
+    ) -> (CompilerState<'a>, Arc<FunctionData>, Vec<Upvalue>) {
         self.compilation_unit
             .chunk
             .write_byte(Opcode::Nil as u8, source_location.clone())
@@ -108,7 +123,35 @@ impl<'a> CompilerState<'a> {
             .map(|outer| *outer)
             .unwrap_or_else(|| CompilerState::new_toplevel(UnitType::Script));
 
-        (parent, finished_function)
+        (parent, finished_function, self.upvalues)
+    }
+
+    fn add_upvalue(
+        &mut self,
+        index: u8,
+        is_local: bool,
+        location: SourceLocation,
+    ) -> Result<Option<u8>> {
+        // If we've already captured this upvalue, just return the id of the existing one
+        if let Some((upvalue_id, _)) = self
+            .upvalues
+            .iter()
+            .enumerate()
+            .find(|(_, u)| u.matches(index, is_local))
+        {
+            return Ok(Some(upvalue_id as u8));
+        }
+
+        // If not, add a new one and return its id
+        if self.upvalues.len() >= u8::MAX as usize {
+            return Err(ParseError::TooManyLocalVariables {
+                token_span: location.span,
+            }
+            .into());
+        }
+        self.upvalues.push(Upvalue { index, is_local });
+        self.compilation_unit.upvalue_count += 1;
+        Ok(Some((self.compilation_unit.upvalue_count - 1) as u8))
     }
 }
 
@@ -198,7 +241,7 @@ impl<'a> Parser<'a> {
                 .chunk
                 .strings
                 .add_all(&self.strings);
-            let (_, function) = self.compiler.finalize(self.previous.location());
+            let (_, function, _) = self.compiler.finalize(self.previous.location());
             Ok(function)
         } else {
             Err(ParseError::NoBytecode(self.errors).into())
@@ -404,13 +447,17 @@ impl<'a> Parser<'a> {
         self.compiler = current_compiler.new_inner(name, unit_type);
     }
 
-    fn finish_compilation_unit(&mut self, source_location: SourceLocation) -> Arc<FunctionData> {
+    fn finish_compilation_unit(
+        &mut self,
+        source_location: SourceLocation,
+    ) -> (Arc<FunctionData>, Vec<Upvalue>) {
         let current_compiler = std::mem::replace(&mut self.compiler, CompilerState::blank());
         let resulting_function: Arc<FunctionData>;
+        let upvalues: Vec<Upvalue>;
 
-        (self.compiler, resulting_function) = current_compiler.finalize(source_location);
+        (self.compiler, resulting_function, upvalues) = current_compiler.finalize(source_location);
 
-        resulting_function
+        (resulting_function, upvalues)
     }
 }
 
@@ -528,7 +575,7 @@ fn build_function(parser: &mut Parser, unit_type: UnitType) -> Result<()> {
 
     parser.consume(
         TokenType::LeftParen,
-        "expected a '(' afetr the name of a function declaration",
+        "expected a '(' after the name of a function declaration",
     )?;
 
     // Argument list
@@ -560,9 +607,23 @@ fn build_function(parser: &mut Parser, unit_type: UnitType) -> Result<()> {
     )?;
     block_statement(parser)?;
 
-    let function = parser.finish_compilation_unit(parser.previous.location());
+    let (function, upvalues) = parser.finish_compilation_unit(parser.previous.location());
     let const_idx = parser.make_constant(Value::Object(Object::Function(function)))?;
-    Ok(parser.emit_bytes_at(&[Opcode::Closure as u8, const_idx], function_name_location))
+
+    // Emit a closure instruction with upvalue indicators
+    parser.emit_bytes_at(
+        &[Opcode::Closure as u8, const_idx],
+        function_name_location.clone(),
+    );
+    for upvalue in upvalues {
+        parser.emit_byte_at(
+            if upvalue.is_local { 1 } else { 0 },
+            function_name_location.clone(),
+        );
+        parser.emit_byte_at(upvalue.index, function_name_location.clone());
+    }
+
+    Ok(())
 }
 
 fn statement(parser: &mut Parser) -> Result<()> {
@@ -782,13 +843,20 @@ fn variable(parser: &mut Parser, can_assign: bool) -> Result<()> {
 fn resolve_variable_expression(parser: &mut Parser, can_assign: bool) -> Result<()> {
     let name_token = parser.previous.clone();
 
-    let (get_op, set_op, idx) = match resolve_local(parser, &name_token)? {
+    let (get_op, set_op, idx) = match resolve_local(&parser.compiler, &name_token)? {
         Some(stack_index) => (Opcode::GetLocal as u8, Opcode::SetLocal as u8, stack_index),
-        None => (
-            Opcode::GetGlobal as u8,
-            Opcode::SetGlobal as u8,
-            parser.identifier_constant(&name_token)?,
-        ),
+        None => match resolve_upvalue(&mut parser.compiler, &name_token)? {
+            Some(upvalue_id) => (
+                Opcode::GetUpvalue as u8,
+                Opcode::SetUpvalue as u8,
+                upvalue_id,
+            ),
+            None => (
+                Opcode::GetGlobal as u8,
+                Opcode::SetGlobal as u8,
+                parser.identifier_constant(&name_token)?,
+            ),
+        },
     };
 
     if can_assign && parser.match_token(TokenType::Equal) {
@@ -800,8 +868,8 @@ fn resolve_variable_expression(parser: &mut Parser, can_assign: bool) -> Result<
     }
 }
 
-fn resolve_local(parser: &Parser, name_token: &Token) -> Result<Option<u8>> {
-    for (stack_idx, local) in parser.compiler.locals.iter().enumerate().rev() {
+fn resolve_local(compiler_state: &CompilerState, name_token: &Token) -> Result<Option<u8>> {
+    for (stack_idx, local) in compiler_state.locals.iter().enumerate().rev() {
         if local.name.lexeme == name_token.lexeme {
             // Found a local binding for this variable
             if local.depth.is_none() {
@@ -817,7 +885,27 @@ fn resolve_local(parser: &Parser, name_token: &Token) -> Result<Option<u8>> {
         }
     }
 
-    // We didn't find a local binding, so the variable must be a global
+    // We didn't find a local binding, so the variable must belong to an enclosing function scope
+    Ok(None)
+}
+
+fn resolve_upvalue(compiler_state: &mut CompilerState, name_token: &Token) -> Result<Option<u8>> {
+    // Check the enclosing function scope
+    if let Some(ref mut enclosing_compiler_state) = &mut compiler_state.enclosing {
+        // If the enclosing function had a local variable with this name, create an upvalue pointing to it
+        if let Some(local_idx) = resolve_local(&enclosing_compiler_state, name_token)? {
+            return compiler_state.add_upvalue(local_idx, true, name_token.location());
+        }
+
+        // If the enclosing function has (or could have) an upvalue pointing at a local variable even
+        // further up, create an upvalue pointing indirectly at it
+        if let Some(upvalue_id) = resolve_upvalue(enclosing_compiler_state, name_token)? {
+            return compiler_state.add_upvalue(upvalue_id, false, name_token.location());
+        }
+    }
+
+    // If there is no enclosign scope or we didn't find a matching local or upvalue, then we
+    // couldn't resolve it. It must be a global.
     Ok(None)
 }
 

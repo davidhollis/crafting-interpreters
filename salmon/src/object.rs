@@ -131,6 +131,7 @@ impl StringData {
 
 pub struct FunctionData {
     pub arity: usize,
+    pub upvalue_count: usize,
     pub chunk: Chunk,
     pub name: Option<Arc<StringData>>,
 }
@@ -139,6 +140,7 @@ impl FunctionData {
     pub fn undefined() -> FunctionData {
         FunctionData {
             arity: 0,
+            upvalue_count: 0,
             chunk: Chunk::new(),
             name: None,
         }

@@ -1,4 +1,4 @@
-use miette::{IntoDiagnostic, Result};
+use miette::{miette, IntoDiagnostic, Result};
 use std::io::{self, Write};
 use termcolor::{Buffer, BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
@@ -37,7 +37,7 @@ pub fn disassemble_chunk_indent(name: &str, chunk: &Chunk, indent: String) -> Re
         }
 
         // Write out the instruction
-        let new_offset = disassemble_instruction_at(chunk, offset, &mut line);
+        let new_offset = disassemble_instruction_at(chunk, offset, &mut line, &indent);
         if new_offset.is_err() {
             color(&mut line, Color::Red)?;
             writeln!(line, "! Error").into_diagnostic()?;
@@ -74,14 +74,19 @@ pub fn disassemble_chunk_indent(name: &str, chunk: &Chunk, indent: String) -> Re
     Ok(())
 }
 
-fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -> Result<usize> {
+fn disassemble_instruction_at(
+    chunk: &Chunk,
+    offset: usize,
+    line: &mut Buffer,
+    indent: &str,
+) -> Result<usize> {
     match (*chunk.byte(offset)?).try_into()? {
         Opcode::Print => render_simple_instruction("Print", offset, line),
         Opcode::Jump => render_jump_instruction("Jump", true, offset, chunk, line),
         Opcode::JumpIfFalse => render_jump_instruction("Jump If False", true, offset, chunk, line),
         Opcode::Loop => render_jump_instruction("Loop", false, offset, chunk, line),
         Opcode::Call => render_call_instruction("Call", offset, chunk, line),
-        Opcode::Closure => render_closure_instruction("Closure", offset, chunk, line),
+        Opcode::Closure => render_closure_instruction("Closure", offset, chunk, line, indent),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
         Opcode::GetLocal => render_local_var_instruction("Get Local", offset, chunk, line),
@@ -89,6 +94,8 @@ fn disassemble_instruction_at(chunk: &Chunk, offset: usize, line: &mut Buffer) -
         Opcode::GetGlobal => render_constant("Get Global", offset, chunk, line),
         Opcode::DefineGlobal => render_constant("Define Global", offset, chunk, line),
         Opcode::SetGlobal => render_constant("Set Global", offset, chunk, line),
+        Opcode::GetUpvalue => render_local_var_instruction("Get Upvalue", offset, chunk, line),
+        Opcode::SetUpvalue => render_local_var_instruction("Set Upvalue", offset, chunk, line),
         Opcode::Equal => render_simple_instruction("Equal", offset, line),
         Opcode::Greater => render_simple_instruction("Greater", offset, line),
         Opcode::Less => render_simple_instruction("Less", offset, line),
@@ -195,6 +202,7 @@ fn render_closure_instruction(
     offset: usize,
     chunk: &Chunk,
     line: &mut Buffer,
+    indent: &str,
 ) -> Result<usize> {
     color(line, Color::Green)?;
     write!(line, "{:-16}", instr_name).into_diagnostic()?;
@@ -203,9 +211,40 @@ fn render_closure_instruction(
     color(line, Color::White)?;
     write!(line, "  0x{:02x} ", const_idx).into_diagnostic()?;
     color(line, Color::Blue)?;
-    writeln!(line, "({})", chunk.constant_at(const_idx)?.show()).into_diagnostic()?;
+    let function = chunk.constant_at(const_idx)?;
+    writeln!(line, "({})", function.show()).into_diagnostic()?;
 
-    Ok(offset + 2)
+    if let Value::Object(Object::Function(function_data)) = function {
+        let upvalue_count = function_data.upvalue_count;
+        let mut offset = offset + 2;
+        for _ in 0..upvalue_count {
+            let is_local = chunk.byte(offset)?;
+            let index = chunk.byte(offset + 1)?;
+
+            line.set_color(ColorSpec::new().set_fg(Some(Color::White)).set_dimmed(true))
+                .into_diagnostic()?;
+            write!(line, "{}{:04}      ", indent, offset).into_diagnostic()?;
+            color(line, Color::Green)?;
+            write!(line, "|                      ").into_diagnostic()?;
+            color(line, Color::Blue)?;
+            writeln!(
+                line,
+                "{:-7} @{}",
+                if *is_local > 0 { "local" } else { "upvalue" },
+                index
+            )
+            .into_diagnostic()?;
+
+            offset += 2;
+        }
+
+        Ok(offset)
+    } else {
+        Err(miette!(
+            "First {} operand was not a function. This is a compiler bug.",
+            instr_name
+        ))
+    }
 }
 
 fn color(buf: &mut Buffer, color: Color) -> Result<()> {
@@ -244,7 +283,7 @@ impl Tracer for DisassemblingTracer {
         }
         self.line_buffer.reset().unwrap();
         writeln!(self.line_buffer, "").unwrap();
-        let res = disassemble_instruction_at(chunk, offset, &mut self.line_buffer);
+        let res = disassemble_instruction_at(chunk, offset, &mut self.line_buffer, "");
         if res.is_err() {
             color(&mut self.line_buffer, Color::Red).unwrap();
             writeln!(self.line_buffer, "! Error").unwrap();
