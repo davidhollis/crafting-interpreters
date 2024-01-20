@@ -9,6 +9,7 @@ pub enum Object {
     Function(Arc<FunctionData>),
     Native(Arc<NativeData>),
     Closure(Arc<ClosureData>),
+    Upvalue(Arc<UpvalueData>),
 }
 
 impl Object {
@@ -35,13 +36,14 @@ impl Object {
             },
             Object::Native(data) => format!("<native fn {}>", data.name.to_string()),
             Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
+            Object::Upvalue(data) => format!("<upvalue {:p}>", data.slot),
         }
     }
 
     pub fn print(&self) -> String {
         match self {
             Object::String(data) => data.contents.to_string(),
-            Object::Function(_) | Object::Native(_) => self.show(),
+            Object::Function(_) | Object::Native(_) | Object::Upvalue(_) => self.show(),
             Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
         }
     }
@@ -51,7 +53,9 @@ impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Object::String(data) => write!(f, r#"<string "{}">"#, data.contents),
-            Object::Function(_) | Object::Native(_) => write!(f, "{}", self.show()),
+            Object::Function(_) | Object::Native(_) | Object::Upvalue(_) => {
+                write!(f, "{}", self.show())
+            }
             Object::Closure(data) => {
                 write!(f, "{}", Object::Function(Arc::clone(&data.function)).show())
             }
@@ -72,6 +76,9 @@ impl PartialEq for Object {
                 Arc::ptr_eq(this_data, other_data)
             }
             (Object::Closure(this_data), Object::Closure(other_data)) => {
+                Arc::ptr_eq(this_data, other_data)
+            }
+            (Object::Upvalue(this_data), Object::Upvalue(other_data)) => {
                 Arc::ptr_eq(this_data, other_data)
             }
             _ => false,
@@ -173,10 +180,53 @@ impl NativeData {
 
 pub struct ClosureData {
     pub function: Arc<FunctionData>,
+    pub upvalues: Vec<Arc<UpvalueData>>,
 }
 
 impl ClosureData {
     pub fn new(function: Arc<FunctionData>) -> Arc<ClosureData> {
-        Arc::new(ClosureData { function })
+        let upvalue_count = function.upvalue_count;
+        Arc::new(ClosureData {
+            function,
+            upvalues: Vec::with_capacity(upvalue_count),
+        })
+    }
+
+    pub fn upvalue_count(&self) -> usize {
+        self.upvalues.len()
+    }
+}
+
+pub struct UpvalueData {
+    // SAFETY: this pointer should only refer to a value on the stack or (eventually) another
+    //         upvalue's storage. There is no public way to initialize an UpvalueData with
+    //         an invalid pointer, and the VM will take care to close any existing UpvalueDatas
+    //         when a referenced value would leave the stack.
+    slot: *mut Value,
+}
+
+// SAFETY: This is mostly a lie. Open upvalues cannot be safely shared across thread boundaries,
+//         but this can be mitigated by explicitly closing them.
+unsafe impl Send for UpvalueData {}
+unsafe impl Sync for UpvalueData {}
+
+impl UpvalueData {
+    pub fn capture(value: &Value) -> Arc<UpvalueData> {
+        Arc::new(UpvalueData {
+            slot: (value as *const _) as *mut _,
+        })
+    }
+
+    pub fn shift(&mut self, new_slot: *mut Value) {
+        self.slot = new_slot
+    }
+
+    pub fn read(&self) -> Value {
+        unsafe { &*self.slot }.clone()
+    }
+
+    pub fn write(&self, new_value: Value) -> () {
+        let old_value = unsafe { std::ptr::replace(self.slot, new_value) };
+        drop(old_value);
     }
 }

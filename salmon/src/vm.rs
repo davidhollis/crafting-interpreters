@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
-    object::{ClosureData, FunctionData, NativeData, NativeFn, Object},
+    object::{ClosureData, FunctionData, NativeData, NativeFn, Object, UpvalueData},
     scanner::SourceLocation,
     table::Table,
     value::{DataType, Value},
@@ -150,6 +150,14 @@ impl<'a> FrameView<'a> {
             Value::Nil
         }
     }
+
+    fn upvalue(&self, id: u8) -> Arc<UpvalueData> {
+        Arc::clone(&self.frame.closure.upvalues[id as usize])
+    }
+
+    fn upvalue_ref(&self, id: u8) -> &Arc<UpvalueData> {
+        &self.frame.closure.upvalues[id as usize]
+    }
 }
 
 pub struct Running {
@@ -257,7 +265,27 @@ impl VM<Running> {
                 let const_idx = frame.next_byte()?;
                 match frame.chunk().constant_at(const_idx)? {
                     Value::Object(Object::Function(function)) => {
-                        frame.push(Value::Object(Object::closure(function)))?;
+                        let opcode_location = frame.previous_opcode_location()?.clone();
+                        let mut closure_ref = ClosureData::new(Arc::clone(function));
+                        let closure =
+                            Arc::get_mut(&mut closure_ref).ok_or_else(|| RuntimeError::Bug {
+                                message: "Somehow we couldn't get an exclusive reference to a closure we just created",
+                                span: opcode_location.span,
+                            })?;
+                        for _ in 0..(function.upvalue_count) {
+                            let locality = frame.next_byte()?;
+                            let index = frame.next_byte()?;
+                            if locality > 0 {
+                                // Local upvalue (capture it from the current stack frame)
+                                closure
+                                    .upvalues
+                                    .push(UpvalueData::capture(&frame.stack[index as usize]));
+                            } else {
+                                // Indirect upvalue (refer to an upvalue in the current frame)
+                                closure.upvalues.push(frame.upvalue(index));
+                            }
+                        }
+                        frame.push(Value::Object(Object::Closure(closure_ref)))?;
                     }
                     v => {
                         return Err(RuntimeError::TypeErrorUnary {
@@ -361,6 +389,17 @@ impl VM<Running> {
                     }
                     .into())
                 }
+            }
+            Opcode::GetUpvalue => {
+                let upvalue_id = frame.next_byte()?;
+                frame.push(frame.upvalue_ref(upvalue_id).read())?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::SetUpvalue => {
+                let upvalue_id = frame.next_byte()?;
+                let new_value = frame.peek(0);
+                frame.upvalue_ref(upvalue_id).write(new_value);
+                Ok(RuntimeAction::Continue)
             }
             Opcode::Equal => {
                 let right = frame.pop()?;

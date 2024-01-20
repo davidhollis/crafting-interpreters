@@ -10,6 +10,7 @@ pub enum DataType {
     Function,
     NativeFunction,
     Closure,
+    Upvalue,
     Nil,
 }
 
@@ -59,6 +60,7 @@ impl Value {
             Value::Object(Object::Function(_)) => data_type == DataType::Function,
             Value::Object(Object::Native(_)) => data_type == DataType::NativeFunction,
             Value::Object(Object::Closure(_)) => data_type == DataType::Closure,
+            Value::Object(Object::Upvalue(_)) => data_type == DataType::Upvalue,
             Value::Nil => data_type == DataType::Nil,
         }
     }
