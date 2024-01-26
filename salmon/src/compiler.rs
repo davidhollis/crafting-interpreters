@@ -37,6 +37,7 @@ pub fn compile_repl(
 struct LocalVariable<'a> {
     name: Token<'a>,
     depth: Option<u8>,
+    is_captured: bool,
 }
 
 #[derive(PartialEq, Eq)]
@@ -76,6 +77,7 @@ impl<'a> CompilerState<'a> {
             locals: vec![LocalVariable {
                 name: Token::blank_name(),
                 depth: Some(0),
+                is_captured: false,
             }],
             scope_depth: 0,
             upvalues: vec![],
@@ -103,6 +105,7 @@ impl<'a> CompilerState<'a> {
             locals: vec![LocalVariable {
                 name: Token::blank_name(),
                 depth: Some(0),
+                is_captured: false,
             }],
             scope_depth: 0,
             upvalues: vec![],
@@ -417,7 +420,11 @@ impl<'a> Parser<'a> {
                 break;
             }
 
-            self.emit_byte(Opcode::Pop as u8);
+            if local.is_captured {
+                self.emit_byte(Opcode::CloseUpvalue as u8);
+            } else {
+                self.emit_byte(Opcode::Pop as u8);
+            }
             let _ = self.compiler.locals.pop();
         }
     }
@@ -432,6 +439,7 @@ impl<'a> Parser<'a> {
         self.compiler.locals.push(LocalVariable {
             name: name_token,
             depth: None,
+            is_captured: false,
         });
         Ok(())
     }
@@ -894,6 +902,7 @@ fn resolve_upvalue(compiler_state: &mut CompilerState, name_token: &Token) -> Re
     if let Some(ref mut enclosing_compiler_state) = &mut compiler_state.enclosing {
         // If the enclosing function had a local variable with this name, create an upvalue pointing to it
         if let Some(local_idx) = resolve_local(&enclosing_compiler_state, name_token)? {
+            enclosing_compiler_state.locals[local_idx as usize].is_captured = true;
             return compiler_state.add_upvalue(local_idx, true, name_token.location());
         }
 

@@ -1,0 +1,36 @@
+fun make_point(x, y) {
+    fun point(field_accessor) {
+        return field_accessor(x, y);
+    }
+
+    return point;
+}
+
+fun point_x(point) {
+    fun get_x(x, y) {
+        return x;
+    }
+
+    return point(get_x);
+}
+
+fun point_y(point) {
+    fun get_y(x, y) {
+        return y;
+    }
+
+    return point(get_y);
+}
+
+fun point_add(left, right) {
+    return make_point(point_x(left) + point_x(right), point_y(left) + point_y(right));
+}
+
+var a = make_point(1, 2);
+print "a = " + debug_closure(a);
+print "";
+var b = make_point(3, 4);
+print "b = " + debug_closure(b);
+print "";
+var c = point_add(a, b);
+print "c = " + debug_closure(c);

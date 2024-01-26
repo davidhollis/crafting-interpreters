@@ -1,4 +1,4 @@
-use std::{sync::Arc, u8};
+use std::{collections::BinaryHeap, sync::Arc, u8};
 
 use miette::{Context, Diagnostic, Report, Result};
 use thiserror::Error;
@@ -20,6 +20,7 @@ pub struct VM<S: VMState> {
     state: S,
     pub strings: Table,
     globals: Table,
+    open_upvalues: BinaryHeap<Arc<UpvalueData>>,
 }
 
 pub fn new() -> VM<Stopped> {
@@ -27,6 +28,7 @@ pub fn new() -> VM<Stopped> {
         state: Stopped { result: Ok(()) },
         strings: Table::new(),
         globals: Table::new(),
+        open_upvalues: BinaryHeap::new(),
     }
 }
 
@@ -64,6 +66,7 @@ struct FrameView<'a> {
     vm_stack_offset: &'a mut usize,
     globals: &'a mut Table,
     strings: &'a mut Table,
+    open_upvalues: &'a mut BinaryHeap<Arc<UpvalueData>>,
 }
 
 impl<'a> FrameView<'a> {
@@ -103,7 +106,7 @@ impl<'a> FrameView<'a> {
 
     fn push(&mut self, value: Value) -> Result<()> {
         if *self.vm_stack_offset < STACK_SIZE {
-            self.stack[*self.vm_stack_offset - self.frame.stack_offset] = value;
+            self.stack[*self.vm_stack_offset] = value;
             *self.vm_stack_offset += 1;
             Ok(())
         } else {
@@ -118,7 +121,7 @@ impl<'a> FrameView<'a> {
         if *self.vm_stack_offset > 0 {
             *self.vm_stack_offset -= 1;
             Ok(std::mem::replace(
-                &mut self.stack[*self.vm_stack_offset - self.frame.stack_offset],
+                &mut self.stack[*self.vm_stack_offset],
                 Value::Nil,
             ))
         } else {
@@ -132,7 +135,7 @@ impl<'a> FrameView<'a> {
     fn pop_ignore(&mut self) -> Result<()> {
         if *self.vm_stack_offset > 0 {
             *self.vm_stack_offset -= 1;
-            self.stack[*self.vm_stack_offset - self.frame.stack_offset] = Value::Nil;
+            self.stack[*self.vm_stack_offset] = Value::Nil;
             Ok(())
         } else {
             Err(RuntimeError::StackUnderflow {
@@ -143,12 +146,16 @@ impl<'a> FrameView<'a> {
     }
 
     fn peek(&self, depth: usize) -> Value {
-        let highest_index = *self.vm_stack_offset - self.frame.stack_offset - 1;
+        let highest_index = *self.vm_stack_offset - 1;
         if depth <= highest_index {
             self.stack[highest_index - depth].clone()
         } else {
             Value::Nil
         }
+    }
+
+    fn local_offset(&self, local_slot: usize) -> usize {
+        local_slot + self.frame.stack_offset
     }
 
     fn upvalue(&self, id: u8) -> Arc<UpvalueData> {
@@ -157,6 +164,30 @@ impl<'a> FrameView<'a> {
 
     fn upvalue_ref(&self, id: u8) -> &Arc<UpvalueData> {
         &self.frame.closure.upvalues[id as usize]
+    }
+
+    fn capture_upvalue(&mut self, slot: usize) -> Arc<UpvalueData> {
+        for existing_upvalue in self.open_upvalues.iter() {
+            if existing_upvalue.points_to_slot(slot) {
+                return Arc::clone(&existing_upvalue);
+            }
+        }
+
+        let new_upvalue = UpvalueData::capture(slot);
+        self.open_upvalues.push(Arc::clone(&new_upvalue));
+
+        new_upvalue
+    }
+
+    fn close_upvalues_beyond(&mut self, last_slot: usize) -> () {
+        while let Some(upvalue) = self.open_upvalues.peek() {
+            if upvalue.slot >= last_slot {
+                upvalue.close(&self.stack);
+                let _ = self.open_upvalues.pop();
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -277,9 +308,9 @@ impl VM<Running> {
                             let index = frame.next_byte()?;
                             if locality > 0 {
                                 // Local upvalue (capture it from the current stack frame)
-                                closure
-                                    .upvalues
-                                    .push(UpvalueData::capture(&frame.stack[index as usize]));
+                                closure.upvalues.push(
+                                    frame.capture_upvalue(frame.local_offset(index as usize)),
+                                );
                             } else {
                                 // Indirect upvalue (refer to an upvalue in the current frame)
                                 closure.upvalues.push(frame.upvalue(index));
@@ -298,6 +329,11 @@ impl VM<Running> {
                 }
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::CloseUpvalue => {
+                frame.close_upvalues_beyond(*frame.vm_stack_offset - 1);
+                frame.pop_ignore()?;
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Return => {
                 let return_value = frame.pop()?;
                 self.pop_frame()?;
@@ -313,15 +349,15 @@ impl VM<Running> {
                 Ok(RuntimeAction::Continue)
             }
             Opcode::GetLocal => {
-                let slot = frame.next_byte()?;
-                let value = frame.stack[slot as usize].clone();
+                let local_slot = frame.next_byte()?;
+                let value = frame.stack[frame.local_offset(local_slot as usize)].clone();
                 frame.push(value)?;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::SetLocal => {
-                let slot = frame.next_byte()?;
+                let local_slot = frame.next_byte()?;
                 let new_value = frame.peek(0);
-                frame.stack[slot as usize] = new_value;
+                frame.stack[frame.local_offset(local_slot as usize)] = new_value;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::GetGlobal => {
@@ -392,13 +428,13 @@ impl VM<Running> {
             }
             Opcode::GetUpvalue => {
                 let upvalue_id = frame.next_byte()?;
-                frame.push(frame.upvalue_ref(upvalue_id).read())?;
+                frame.push(frame.upvalue_ref(upvalue_id).read(&frame.stack))?;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::SetUpvalue => {
                 let upvalue_id = frame.next_byte()?;
                 let new_value = frame.peek(0);
-                frame.upvalue_ref(upvalue_id).write(new_value);
+                frame.upvalue(upvalue_id).write(&mut frame.stack, new_value);
                 Ok(RuntimeAction::Continue)
             }
             Opcode::Equal => {
@@ -519,21 +555,33 @@ impl VM<Running> {
 
     fn current_frame_view<'a>(&'a mut self) -> FrameView<'a> {
         let frame = self.state.frames.last_mut().unwrap();
-        let frame_stack_offset = frame.stack_offset;
+
         FrameView {
             frame,
-            stack: &mut self.state.stack[frame_stack_offset..],
+            stack: &mut self.state.stack[..],
             vm_stack_offset: &mut self.state.stack_offset,
             globals: &mut self.globals,
             strings: &mut self.strings,
+            open_upvalues: &mut self.open_upvalues,
         }
     }
 
     fn pop_frame(&mut self) -> Result<()> {
-        let popped_frame =
+        let mut popped_frame =
             self.state.frames.pop().ok_or_else(|| {
                 Into::<Report>::into(RuntimeError::StackUnderflow { span: (0, 0) })
             })?;
+        let popped_frame_stack_offset = popped_frame.stack_offset;
+
+        FrameView {
+            frame: &mut popped_frame,
+            stack: &mut self.state.stack[..],
+            vm_stack_offset: &mut self.state.stack_offset,
+            globals: &mut self.globals,
+            strings: &mut self.strings,
+            open_upvalues: &mut self.open_upvalues,
+        }
+        .close_upvalues_beyond(popped_frame_stack_offset);
 
         // Pop the function and its arguments from the stack.
         while self.state.stack_offset > popped_frame.stack_offset {
@@ -631,6 +679,7 @@ impl VM<Running> {
             },
             strings: self.strings,
             globals: self.globals,
+            open_upvalues: self.open_upvalues,
         }
     }
 }
@@ -675,6 +724,7 @@ impl VM<Stopped> {
             state: Running::new(toplevel_function),
             strings: self.strings,
             globals: self.globals,
+            open_upvalues: self.open_upvalues,
         };
         running.run()
     }
@@ -689,6 +739,7 @@ impl VM<Stopped> {
             state: Running::new(toplevel_function),
             strings: self.strings,
             globals: self.globals,
+            open_upvalues: self.open_upvalues,
         };
         running.trace(tracer)
     }

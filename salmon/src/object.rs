@@ -1,5 +1,9 @@
 use miette::Result;
-use std::{fmt::Debug, sync::Arc};
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+    sync::{Arc, RwLock},
+};
 
 use crate::{chunk::Chunk, table::Table, value::Value};
 
@@ -36,7 +40,7 @@ impl Object {
             },
             Object::Native(data) => format!("<native fn {}>", data.name.to_string()),
             Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
-            Object::Upvalue(data) => format!("<upvalue {:p}>", data.slot),
+            Object::Upvalue(data) => data.show_reference(),
         }
     }
 
@@ -198,35 +202,108 @@ impl ClosureData {
 }
 
 pub struct UpvalueData {
-    // SAFETY: this pointer should only refer to a value on the stack or (eventually) another
-    //         upvalue's storage. There is no public way to initialize an UpvalueData with
-    //         an invalid pointer, and the VM will take care to close any existing UpvalueDatas
-    //         when a referenced value would leave the stack.
-    slot: *mut Value,
+    state: RwLock<UpvalueReference>,
+    pub slot: usize,
 }
 
-// SAFETY: This is mostly a lie. Open upvalues cannot be safely shared across thread boundaries,
-//         but this can be mitigated by explicitly closing them.
-unsafe impl Send for UpvalueData {}
-unsafe impl Sync for UpvalueData {}
+impl PartialEq for UpvalueData {
+    fn eq(&self, other: &Self) -> bool {
+        if self.slot == other.slot {
+            if let (Ok(this_state), Ok(other_state)) = (self.state.read(), other.state.read()) {
+                match (this_state.deref(), other_state.deref()) {
+                    (UpvalueReference::Open, UpvalueReference::Open) => true,
+                    (UpvalueReference::Closed(_), UpvalueReference::Closed(_)) => true,
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+}
+
+impl Eq for UpvalueData {}
+
+impl PartialOrd for UpvalueData {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.slot.partial_cmp(&other.slot)
+    }
+}
+
+impl Ord for UpvalueData {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.slot.cmp(&other.slot)
+    }
+}
+
+enum UpvalueReference {
+    Open,
+    Closed(Value),
+}
 
 impl UpvalueData {
-    pub fn capture(value: &Value) -> Arc<UpvalueData> {
+    pub fn capture(slot: usize) -> Arc<UpvalueData> {
         Arc::new(UpvalueData {
-            slot: (value as *const _) as *mut _,
+            state: RwLock::new(UpvalueReference::Open),
+            slot,
         })
     }
 
-    pub fn shift(&mut self, new_slot: *mut Value) {
-        self.slot = new_slot
+    pub fn points_to_slot(&self, slot: usize) -> bool {
+        if let Ok(state) = self.state.read() {
+            match state.deref() {
+                UpvalueReference::Open => self.slot == slot,
+                UpvalueReference::Closed(_) => false,
+            }
+        } else {
+            false
+        }
     }
 
-    pub fn read(&self) -> Value {
-        unsafe { &*self.slot }.clone()
+    pub fn read(&self, stack: &[Value]) -> Value {
+        if let Ok(state) = self.state.read() {
+            match state.deref() {
+                UpvalueReference::Open => stack[self.slot].clone(),
+                UpvalueReference::Closed(value) => value.clone(),
+            }
+        } else {
+            Value::Nil
+        }
     }
 
-    pub fn write(&self, new_value: Value) -> () {
-        let old_value = unsafe { std::ptr::replace(self.slot, new_value) };
-        drop(old_value);
+    pub fn write(&self, stack: &mut [Value], new_value: Value) -> () {
+        if let Ok(mut state) = self.state.write() {
+            match state.deref_mut() {
+                UpvalueReference::Open => stack[self.slot] = new_value,
+                UpvalueReference::Closed(ref mut value) => *value = new_value,
+            }
+        }
+    }
+
+    pub fn close(&self, stack: &[Value]) -> () {
+        if let Ok(mut state) = self.state.write() {
+            match state.deref_mut() {
+                UpvalueReference::Open => {
+                    let closed_value = stack[self.slot].clone();
+                    *state = UpvalueReference::Closed(closed_value);
+                }
+                // Attempting to re-close an already closed upvalue should never happen in practice.
+                // In theory, this should be an error of some kind, but we'll treat it as a no-op.
+                UpvalueReference::Closed(_) => (),
+            }
+        }
+    }
+
+    pub fn show_reference(&self) -> String {
+        if let Ok(state) = self.state.read() {
+            match state.deref() {
+                UpvalueReference::Open => format!("<open upvalue @{}>", self.slot),
+                UpvalueReference::Closed(value) => format!("<closed upvalue: {:?}>", value),
+            }
+        } else {
+            "<upvalue ???>".to_string()
+        }
     }
 }

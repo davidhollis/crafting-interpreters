@@ -87,6 +87,7 @@ fn disassemble_instruction_at(
         Opcode::Loop => render_jump_instruction("Loop", false, offset, chunk, line),
         Opcode::Call => render_call_instruction("Call", offset, chunk, line),
         Opcode::Closure => render_closure_instruction("Closure", offset, chunk, line, indent),
+        Opcode::CloseUpvalue => render_simple_instruction("Close Upvalue", offset, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
         Opcode::GetLocal => render_local_var_instruction("Get Local", offset, chunk, line),
