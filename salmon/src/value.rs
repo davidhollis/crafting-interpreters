@@ -12,6 +12,7 @@ pub enum DataType {
     Closure,
     Upvalue,
     Class,
+    Instance,
     Nil,
 }
 
@@ -63,6 +64,7 @@ impl Value {
             Value::Object(Object::Closure(_)) => data_type == DataType::Closure,
             Value::Object(Object::Upvalue(_)) => data_type == DataType::Upvalue,
             Value::Object(Object::Class(_)) => data_type == DataType::Class,
+            Value::Object(Object::Instance(_)) => data_type == DataType::Instance,
             Value::Nil => data_type == DataType::Nil,
         }
     }

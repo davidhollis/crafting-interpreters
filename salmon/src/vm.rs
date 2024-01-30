@@ -5,7 +5,10 @@ use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
-    object::{ClassData, ClosureData, FunctionData, NativeData, NativeFn, Object, UpvalueData},
+    object::{
+        ClassData, ClosureData, FunctionData, InstanceData, NativeData, NativeFn, Object,
+        UpvalueData,
+    },
     scanner::SourceLocation,
     table::Table,
     value::{DataType, Value},
@@ -614,6 +617,22 @@ impl VM<Running> {
     fn call_value(&mut self, value: Value, arg_count: u8) -> Result<()> {
         match value {
             Value::Object(Object::Closure(closure)) => self.call_function(closure, arg_count),
+            Value::Object(Object::Class(class)) => {
+                let new_instance = Value::Object(Object::Instance(InstanceData::of_class(&class)));
+                let arg_count = arg_count as usize;
+                let initializer_frame_offset = self.state.stack_offset - arg_count - 1;
+
+                // TODO(hollis): factor this "pop all the arguments and push the return value" behavior
+                while self.state.stack_offset > initializer_frame_offset {
+                    self.state.stack_offset -= 1;
+                    self.state.stack[self.state.stack_offset] = Value::Nil;
+                }
+
+                self.state.stack[self.state.stack_offset] = new_instance;
+                self.state.stack_offset += 1;
+
+                Ok(())
+            }
             Value::Object(Object::Native(native)) => {
                 let arg_count = arg_count as usize;
                 let native_frame_offset = self.state.stack_offset - arg_count - 1;
