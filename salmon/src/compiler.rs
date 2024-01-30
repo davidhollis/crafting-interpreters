@@ -474,7 +474,9 @@ impl<'a> Parser<'a> {
 //               but others could very realistically be associated functions on Parser
 
 fn declaration(parser: &mut Parser) -> Result<()> {
-    if parser.match_token(TokenType::Fun) {
+    if parser.match_token(TokenType::Class) {
+        class_declaration(parser)
+    } else if parser.match_token(TokenType::Fun) {
         function_declaration(parser)
     } else if parser.match_token(TokenType::Var) {
         var_declaration(parser)
@@ -483,8 +485,31 @@ fn declaration(parser: &mut Parser) -> Result<()> {
     }
 }
 
+fn class_declaration(parser: &mut Parser) -> Result<()> {
+    parser.consume(TokenType::Identifier, "expected a class name")?;
+    let name_token = parser.previous.clone();
+    let global_id = parser.identifier_constant(&name_token)?;
+    let name_location = parser.previous.location();
+
+    if !parser.is_global_scope() {
+        declare_local_variable(parser, name_token)?;
+        parser.mark_last_initialized();
+    }
+
+    parser.emit_bytes_at(&[Opcode::Class as u8, global_id], name_location.clone());
+
+    if parser.is_global_scope() {
+        define_global_variable(parser, global_id, name_location);
+    }
+
+    parser.consume(TokenType::LeftBrace, "expected '{' before a class body")?;
+    parser.consume(TokenType::RightBrace, "expected '}' after a class body")?;
+
+    Ok(())
+}
+
 fn function_declaration(parser: &mut Parser) -> Result<()> {
-    let global_id = consume_variable_name(parser)?;
+    let global_id = consume_variable_name(parser, "fun")?;
     let name_location = parser.previous.location();
 
     if !parser.is_global_scope() {
@@ -502,7 +527,7 @@ fn function_declaration(parser: &mut Parser) -> Result<()> {
 
 fn var_declaration(parser: &mut Parser) -> Result<()> {
     let var_location = parser.previous.location();
-    let global_id = consume_variable_name(parser)?;
+    let global_id = consume_variable_name(parser, "var")?;
     let name_location = parser.previous.location();
 
     if parser.match_token(TokenType::Equal) {
@@ -528,8 +553,11 @@ fn var_declaration(parser: &mut Parser) -> Result<()> {
     Ok(())
 }
 
-fn consume_variable_name(parser: &mut Parser) -> Result<u8> {
-    parser.consume(TokenType::Identifier, "expected identifier after 'var'")?;
+fn consume_variable_name(parser: &mut Parser, keyword: &str) -> Result<u8> {
+    parser.consume(
+        TokenType::Identifier,
+        &format!("expected identifier after '{}'", keyword),
+    )?;
     let name_token = parser.previous.clone();
 
     if parser.is_global_scope() {
@@ -596,7 +624,7 @@ fn build_function(parser: &mut Parser, unit_type: UnitType) -> Result<()> {
                 }
                 .into());
             }
-            let _ = consume_variable_name(parser)?;
+            let _ = consume_variable_name(parser, "argument list")?;
             parser.mark_last_initialized();
 
             if !parser.match_token(TokenType::Comma) {

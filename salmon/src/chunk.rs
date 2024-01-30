@@ -37,6 +37,7 @@ pub enum Opcode {
     Closure,
     CloseUpvalue,
     Return,
+    Class,
 }
 
 impl Opcode {

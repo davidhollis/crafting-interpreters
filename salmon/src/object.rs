@@ -14,6 +14,7 @@ pub enum Object {
     Native(Arc<NativeData>),
     Closure(Arc<ClosureData>),
     Upvalue(Arc<UpvalueData>),
+    Class(Arc<ClassData>),
 }
 
 impl Object {
@@ -41,13 +42,16 @@ impl Object {
             Object::Native(data) => format!("<native fn {}>", data.name.to_string()),
             Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
             Object::Upvalue(data) => data.show_reference(),
+            Object::Class(data) => format!("<class {}>", data.name.to_string()),
         }
     }
 
     pub fn print(&self) -> String {
         match self {
             Object::String(data) => data.contents.to_string(),
-            Object::Function(_) | Object::Native(_) | Object::Upvalue(_) => self.show(),
+            Object::Function(_) | Object::Native(_) | Object::Upvalue(_) | Object::Class(_) => {
+                self.show()
+            }
             Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
         }
     }
@@ -57,7 +61,7 @@ impl Debug for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Object::String(data) => write!(f, r#"<string "{}">"#, data.contents),
-            Object::Function(_) | Object::Native(_) | Object::Upvalue(_) => {
+            Object::Function(_) | Object::Native(_) | Object::Upvalue(_) | Object::Class(_) => {
                 write!(f, "{}", self.show())
             }
             Object::Closure(data) => {
@@ -83,6 +87,9 @@ impl PartialEq for Object {
                 Arc::ptr_eq(this_data, other_data)
             }
             (Object::Upvalue(this_data), Object::Upvalue(other_data)) => {
+                Arc::ptr_eq(this_data, other_data)
+            }
+            (Object::Class(this_data), Object::Class(other_data)) => {
                 Arc::ptr_eq(this_data, other_data)
             }
             _ => false,
@@ -305,5 +312,17 @@ impl UpvalueData {
         } else {
             "<upvalue ???>".to_string()
         }
+    }
+}
+
+pub struct ClassData {
+    pub name: Arc<StringData>,
+}
+
+impl ClassData {
+    pub fn new(name: &Arc<StringData>) -> Arc<ClassData> {
+        Arc::new(ClassData {
+            name: Arc::clone(name),
+        })
     }
 }

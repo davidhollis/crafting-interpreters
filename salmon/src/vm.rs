@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     chunk::{Chunk, Opcode},
-    object::{ClosureData, FunctionData, NativeData, NativeFn, Object, UpvalueData},
+    object::{ClassData, ClosureData, FunctionData, NativeData, NativeFn, Object, UpvalueData},
     scanner::SourceLocation,
     table::Table,
     value::{DataType, Value},
@@ -342,6 +342,21 @@ impl VM<Running> {
                     Ok(RuntimeAction::Continue)
                 } else {
                     Ok(RuntimeAction::Halt)
+                }
+            }
+            Opcode::Class => {
+                let name_idx = frame.next_byte()?;
+                let class_name = frame.chunk().constant_at(name_idx)?;
+                if let Value::Object(Object::String(name_ref)) = class_name {
+                    frame.push(Value::Object(Object::Class(ClassData::new(name_ref))))?;
+                    Ok(RuntimeAction::Continue)
+                } else {
+                    Err(RuntimeError::Bug {
+                        message:
+                            "Class instruction somehow points at something other than a string",
+                        span: frame.previous_opcode_location()?.span,
+                    }
+                    .into())
                 }
             }
             Opcode::Pop => {
