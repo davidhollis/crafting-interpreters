@@ -98,6 +98,8 @@ fn disassemble_instruction_at(
         Opcode::SetGlobal => render_constant("Set Global", offset, chunk, line),
         Opcode::GetUpvalue => render_local_var_instruction("Get Upvalue", offset, chunk, line),
         Opcode::SetUpvalue => render_local_var_instruction("Set Upvalue", offset, chunk, line),
+        Opcode::GetProperty => render_constant("Get Property", offset, chunk, line),
+        Opcode::SetProperty => render_constant("Set Property", offset, chunk, line),
         Opcode::Equal => render_simple_instruction("Equal", offset, line),
         Opcode::Greater => render_simple_instruction("Greater", offset, line),
         Opcode::Less => render_simple_instruction("Less", offset, line),

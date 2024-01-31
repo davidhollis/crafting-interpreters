@@ -455,6 +455,73 @@ impl VM<Running> {
                 frame.upvalue(upvalue_id).write(&mut frame.stack, new_value);
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::GetProperty => {
+                let property_name_idx = frame.next_byte()?;
+                let property_name = frame.chunk().constant_at(property_name_idx)?;
+
+                if let Value::Object(Object::String(name_ref)) = property_name {
+                    let receiver = frame.peek(0);
+                    if let Value::Object(Object::Instance(ref instance_ref)) = receiver {
+                        if let Some(value) = instance_ref.get_field(name_ref) {
+                            frame.pop_ignore()?; // pop the receiver
+                            frame.push(value)?;
+                            Ok(RuntimeAction::Continue)
+                        } else {
+                            Err(RuntimeError::NoSuchProperty {
+                                receiver,
+                                property: name_ref.to_string(),
+                                access_span: frame.previous_opcode_location()?.span,
+                            }
+                            .into())
+                        }
+                    } else {
+                        Err(RuntimeError::BadPropertyAccess {
+                            receiver,
+                            property: name_ref.to_string(),
+                            operation: "get",
+                            access_span: frame.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                } else {
+                    Err(RuntimeError::Bug {
+                        message:
+                            "GetProperty instruction somehow points at something other than a string",
+                        span: frame.previous_opcode_location()?.span,
+                    }
+                    .into())
+                }
+            }
+            Opcode::SetProperty => {
+                let property_name_idx = frame.next_byte()?;
+                let property_name = frame.chunk().constant_at(property_name_idx)?;
+
+                if let Value::Object(Object::String(name_ref)) = property_name {
+                    let receiver = frame.peek(1);
+                    if let Value::Object(Object::Instance(ref instance_ref)) = receiver {
+                        let _ = instance_ref.set_field(Arc::clone(name_ref), frame.peek(0));
+                        let new_value = frame.pop()?;
+                        frame.pop_ignore()?; // pop the receiver
+                        frame.push(new_value)?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        Err(RuntimeError::BadPropertyAccess {
+                            receiver,
+                            property: name_ref.to_string(),
+                            operation: "get",
+                            access_span: frame.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                } else {
+                    Err(RuntimeError::Bug {
+                        message:
+                            "SetProperty instruction somehow points at something other than a string",
+                        span: frame.previous_opcode_location()?.span,
+                    }
+                    .into())
+                }
+            }
             Opcode::Equal => {
                 let right = frame.pop()?;
                 let left = frame.pop()?;
@@ -856,6 +923,29 @@ pub enum RuntimeError {
         expected: usize,
         #[label("call site")]
         call_span: (usize, usize),
+    },
+    #[error("cannot {operation} property '{property}' of {receiver:?}")]
+    #[diagnostic(
+        code(runtime::bad_property_access),
+        help("only instances have properties")
+    )]
+    BadPropertyAccess {
+        receiver: Value,
+        property: String,
+        operation: &'static str,
+        #[label("here")]
+        access_span: (usize, usize),
+    },
+    #[error("instance {receiver:?} has no property '{property}'")]
+    #[diagnostic(
+        code(runtime::no_such_property),
+        help("instance properties must be set before they can be read")
+    )]
+    NoSuchProperty {
+        receiver: Value,
+        property: String,
+        #[label("accessed here")]
+        access_span: (usize, usize),
     },
     #[error("bug in VM: {message}")]
     #[diagnostic(code(runtime::internal::bug))]

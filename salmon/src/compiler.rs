@@ -961,6 +961,27 @@ fn call(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     Ok(parser.emit_bytes_at(&[Opcode::Call as u8, arg_count], open_paren_location))
 }
 
+fn dot(parser: &mut Parser, can_assign: bool) -> Result<()> {
+    parser.consume(TokenType::Identifier, "expected a property name after '.'")?;
+    let property_name = parser.previous.clone();
+    let name_idx = parser.identifier_constant(&property_name)?;
+
+    if can_assign && parser.match_token(TokenType::Equal) {
+        expression(parser)?;
+        parser.emit_bytes_at(
+            &[Opcode::SetProperty as u8, name_idx],
+            property_name.location(),
+        );
+        Ok(())
+    } else {
+        parser.emit_bytes_at(
+            &[Opcode::GetProperty as u8, name_idx],
+            property_name.location(),
+        );
+        Ok(())
+    }
+}
+
 fn argument_list(parser: &mut Parser) -> Result<u8> {
     let mut arg_count = 0;
     if !parser.check_token(TokenType::RightParen) {
@@ -1157,7 +1178,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Comma
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::Dot
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: None, infix: Some(dot), precedence: Precedence::Call },
     // TokenType::Minus
     ParseRule { prefix: Some(unary_op), infix: Some(binary_op), precedence: Precedence::Term },
     // TokenType::Plus

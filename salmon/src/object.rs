@@ -342,14 +342,28 @@ impl ClassData {
 
 pub struct InstanceData {
     pub class: Arc<ClassData>,
-    pub fields: Table,
+    fields: RwLock<Table>,
 }
 
 impl InstanceData {
     pub fn of_class(class: &Arc<ClassData>) -> Arc<InstanceData> {
         Arc::new(InstanceData {
             class: Arc::clone(class),
-            fields: Table::new(),
+            fields: RwLock::new(Table::new()),
         })
+    }
+
+    pub fn get_field(&self, name: &Arc<StringData>) -> Option<Value> {
+        if let Ok(fields) = self.fields.read() {
+            fields.get(name)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_field(&self, name: Arc<StringData>, value: Value) -> () {
+        if let Ok(mut fields) = self.fields.write() {
+            fields.set(name, value);
+        }
     }
 }
