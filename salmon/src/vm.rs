@@ -679,6 +679,8 @@ impl VM<Running> {
         match value {
             Value::Object(Object::Closure(closure)) => self.call_function(closure, arg_count),
             Value::Object(Object::BoundMethod(bound_method)) => {
+                self.state.stack[self.state.stack_offset - (arg_count as usize) - 1] =
+                    bound_method.receiver.clone();
                 self.call_function(Arc::clone(&bound_method.method), arg_count)
             }
             Value::Object(Object::Class(class)) => {

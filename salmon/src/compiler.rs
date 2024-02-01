@@ -43,7 +43,17 @@ struct LocalVariable<'a> {
 #[derive(PartialEq, Eq)]
 enum UnitType {
     Function,
+    Method,
     Script,
+}
+
+impl UnitType {
+    pub fn slot_zero_token(&self) -> Token<'static> {
+        match self {
+            UnitType::Method => Token::this(),
+            _ => Token::blank_name(),
+        }
+    }
 }
 
 struct Upvalue {
@@ -70,12 +80,13 @@ impl<'a> CompilerState<'a> {
     fn new_toplevel(unit_type: UnitType) -> CompilerState<'static> {
         let mut compilation_unit = FunctionData::undefined();
         compilation_unit.name = Some(StringData::new("<toplevel>"));
+        let slot_zero_token = unit_type.slot_zero_token();
         CompilerState {
             enclosing: None,
             compilation_unit,
             unit_type,
             locals: vec![LocalVariable {
-                name: Token::blank_name(),
+                name: slot_zero_token,
                 depth: Some(0),
                 is_captured: false,
             }],
@@ -98,12 +109,13 @@ impl<'a> CompilerState<'a> {
     fn new_inner(self, name: Arc<StringData>, unit_type: UnitType) -> CompilerState<'a> {
         let mut compilation_unit = FunctionData::undefined();
         compilation_unit.name = Some(name);
+        let slot_zero_token = unit_type.slot_zero_token();
         CompilerState {
             enclosing: Some(Box::new(self)),
             compilation_unit,
             unit_type,
             locals: vec![LocalVariable {
-                name: Token::blank_name(),
+                name: slot_zero_token,
                 depth: Some(0),
                 is_captured: false,
             }],
@@ -158,12 +170,15 @@ impl<'a> CompilerState<'a> {
     }
 }
 
+struct CurrentClass {}
+
 struct Parser<'a> {
     scanner: Scanner<'a>,
     previous: Token<'a>,
     current: Token<'a>,
     compiler: CompilerState<'a>,
     strings: Table,
+    current_class: Option<CurrentClass>,
     errors: Vec<ParseError>,
     panic_mode: bool,
 }
@@ -178,6 +193,7 @@ impl<'a> Parser<'a> {
             current: Token::empty(),
             compiler: CompilerState::new_toplevel(UnitType::Script),
             strings,
+            current_class: None,
             errors: vec![],
             panic_mode: false,
         }
@@ -502,6 +518,8 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
         define_global_variable(parser, global_id, name_location);
     }
 
+    let enclosing_class = std::mem::replace(&mut parser.current_class, Some(CurrentClass {}));
+
     resolve_variable_expression(parser, &name_token, false)?;
 
     parser.consume(TokenType::LeftBrace, "expected '{' before a class body")?;
@@ -510,6 +528,8 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
     }
     parser.consume(TokenType::RightBrace, "expected '}' after a class body")?;
     parser.emit_byte(Opcode::Pop as u8);
+
+    parser.current_class = enclosing_class;
 
     Ok(())
 }
@@ -520,7 +540,7 @@ fn method_declarartion(parser: &mut Parser) -> Result<()> {
     let global_id = parser.identifier_constant(&name_token)?;
     let name_location = name_token.location();
 
-    build_function(parser, UnitType::Function)?;
+    build_function(parser, UnitType::Method)?;
 
     parser.emit_bytes_at(&[Opcode::Method as u8, global_id], name_location);
 
@@ -895,6 +915,16 @@ fn variable(parser: &mut Parser, can_assign: bool) -> Result<()> {
     resolve_variable_expression(parser, &parser.previous.clone(), can_assign)
 }
 
+fn this(parser: &mut Parser, _can_assign: bool) -> Result<()> {
+    if parser.current_class.is_none() {
+        return Err(ParseError::InvalidSelfReference {
+            bad_this_span: parser.previous.location().span,
+        }
+        .into());
+    }
+    variable(parser, false)
+}
+
 fn resolve_variable_expression(
     parser: &mut Parser,
     name_token: &Token,
@@ -1257,7 +1287,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Super
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::This
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(this), infix: None, precedence: Precedence::None },
     // TokenType::True
     ParseRule { prefix: Some(literal), infix: None, precedence: Precedence::None },
     // TokenType::Var
@@ -1357,6 +1387,12 @@ pub enum ParseError {
     BadReturn {
         #[label("here")]
         bad_return_span: (usize, usize),
+    },
+    #[error("attempted to refer to 'this' outside of a class")]
+    #[diagnostic(code(compiler::invalid_self_reference))]
+    InvalidSelfReference {
+        #[label("here")]
+        bad_this_span: (usize, usize),
     },
     #[error("failed to produce bytecode due to the following error(s)")]
     #[diagnostic(code(compiler::no_bytecode))]

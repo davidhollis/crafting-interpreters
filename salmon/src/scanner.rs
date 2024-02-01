@@ -122,6 +122,15 @@ impl Token<'_> {
         }
     }
 
+    pub fn this() -> Token<'static> {
+        Token {
+            tpe: TokenType::This,
+            lexeme: "this",
+            source_offset: 0,
+            line: 0,
+        }
+    }
+
     pub fn error_span(&self) -> (usize, usize) {
         (self.source_offset, self.lexeme.len())
     }
