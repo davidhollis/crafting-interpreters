@@ -90,6 +90,7 @@ fn disassemble_instruction_at(
         Opcode::CloseUpvalue => render_simple_instruction("Close Upvalue", offset, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
         Opcode::Class => render_constant("Define Class", offset, chunk, line),
+        Opcode::Method => render_constant("Define Method", offset, chunk, line),
         Opcode::Pop => render_simple_instruction("Pop", offset, line),
         Opcode::GetLocal => render_local_var_instruction("Get Local", offset, chunk, line),
         Opcode::SetLocal => render_local_var_instruction("Set Local", offset, chunk, line),

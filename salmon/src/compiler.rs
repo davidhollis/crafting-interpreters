@@ -489,10 +489,10 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
     parser.consume(TokenType::Identifier, "expected a class name")?;
     let name_token = parser.previous.clone();
     let global_id = parser.identifier_constant(&name_token)?;
-    let name_location = parser.previous.location();
+    let name_location = name_token.location();
 
     if !parser.is_global_scope() {
-        declare_local_variable(parser, name_token)?;
+        declare_local_variable(parser, name_token.clone())?;
         parser.mark_last_initialized();
     }
 
@@ -502,8 +502,27 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
         define_global_variable(parser, global_id, name_location);
     }
 
+    resolve_variable_expression(parser, &name_token, false)?;
+
     parser.consume(TokenType::LeftBrace, "expected '{' before a class body")?;
+    while !parser.check_token(TokenType::RightBrace) && !parser.check_token(TokenType::EOF) {
+        method_declarartion(parser)?;
+    }
     parser.consume(TokenType::RightBrace, "expected '}' after a class body")?;
+    parser.emit_byte(Opcode::Pop as u8);
+
+    Ok(())
+}
+
+fn method_declarartion(parser: &mut Parser) -> Result<()> {
+    parser.consume(TokenType::Identifier, "expected a method name")?;
+    let name_token = parser.previous.clone();
+    let global_id = parser.identifier_constant(&name_token)?;
+    let name_location = name_token.location();
+
+    build_function(parser, UnitType::Function)?;
+
+    parser.emit_bytes_at(&[Opcode::Method as u8, global_id], name_location);
 
     Ok(())
 }
@@ -873,12 +892,14 @@ fn string(parser: &mut Parser, _can_assign: bool) -> Result<()> {
 }
 
 fn variable(parser: &mut Parser, can_assign: bool) -> Result<()> {
-    resolve_variable_expression(parser, can_assign)
+    resolve_variable_expression(parser, &parser.previous.clone(), can_assign)
 }
 
-fn resolve_variable_expression(parser: &mut Parser, can_assign: bool) -> Result<()> {
-    let name_token = parser.previous.clone();
-
+fn resolve_variable_expression(
+    parser: &mut Parser,
+    name_token: &Token,
+    can_assign: bool,
+) -> Result<()> {
     let (get_op, set_op, idx) = match resolve_local(&parser.compiler, &name_token)? {
         Some(stack_index) => (Opcode::GetLocal as u8, Opcode::SetLocal as u8, stack_index),
         None => match resolve_upvalue(&mut parser.compiler, &name_token)? {

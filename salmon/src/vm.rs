@@ -6,8 +6,8 @@ use thiserror::Error;
 use crate::{
     chunk::{Chunk, Opcode},
     object::{
-        ClassData, ClosureData, FunctionData, InstanceData, NativeData, NativeFn, Object,
-        UpvalueData,
+        BoundMethodData, ClassData, ClosureData, FunctionData, InstanceData, NativeData, NativeFn,
+        Object, StringData, UpvalueData,
     },
     scanner::SourceLocation,
     table::Table,
@@ -89,6 +89,22 @@ impl<'a> FrameView<'a> {
         self.frame.ip += 2;
 
         Ok(((*high_byte as u16) << 8) | (*low_byte as u16))
+    }
+
+    fn next_string_ref(&mut self, op: &'static str) -> Result<Arc<StringData>> {
+        let string_idx = self.next_byte()?;
+        let string = self.chunk().constant_at(string_idx)?;
+        if let Value::Object(Object::String(string)) = string {
+            Ok(Arc::clone(&string))
+        } else {
+            Err(RuntimeError::Bug {
+                message: format!(
+                    "{op} instruction somehow points at something other than a string"
+                ),
+                span: self.previous_opcode_location()?.span,
+            }
+            .into())
+        }
     }
 
     fn previous_opcode_location(&self) -> Result<&SourceLocation> {
@@ -303,7 +319,7 @@ impl VM<Running> {
                         let mut closure_ref = ClosureData::new(Arc::clone(function));
                         let closure =
                             Arc::get_mut(&mut closure_ref).ok_or_else(|| RuntimeError::Bug {
-                                message: "Somehow we couldn't get an exclusive reference to a closure we just created",
+                                message: "Somehow we couldn't get an exclusive reference to a closure we just created".to_string(),
                                 span: opcode_location.span,
                             })?;
                         for _ in 0..(function.upvalue_count) {
@@ -348,15 +364,34 @@ impl VM<Running> {
                 }
             }
             Opcode::Class => {
-                let name_idx = frame.next_byte()?;
-                let class_name = frame.chunk().constant_at(name_idx)?;
-                if let Value::Object(Object::String(name_ref)) = class_name {
-                    frame.push(Value::Object(Object::Class(ClassData::new(name_ref))))?;
-                    Ok(RuntimeAction::Continue)
+                let class_name = frame.next_string_ref("Class")?;
+                frame.push(Value::Object(Object::Class(ClassData::new(&class_name))))?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Method => {
+                let method_name = frame.next_string_ref("Method")?;
+                let method_impl = frame.peek(0);
+                let class = frame.peek(1);
+
+                if let Value::Object(Object::Class(ref class_data)) = class {
+                    if method_impl.is(DataType::Closure) {
+                        class_data.add_method(method_name, method_impl);
+                        frame.pop_ignore()?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        Err(RuntimeError::TypeErrorBinary {
+                            op_symbol: "<method>",
+                            lvalue: class,
+                            rvalue: method_impl,
+                            span: frame.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
                 } else {
-                    Err(RuntimeError::Bug {
-                        message:
-                            "Class instruction somehow points at something other than a string",
+                    Err(RuntimeError::TypeErrorBinary {
+                        op_symbol: "<method>",
+                        lvalue: class,
+                        rvalue: method_impl,
                         span: frame.previous_opcode_location()?.span,
                     }
                     .into())
@@ -379,69 +414,39 @@ impl VM<Running> {
                 Ok(RuntimeAction::Continue)
             }
             Opcode::GetGlobal => {
-                let name_idx = frame.next_byte()?;
-                let global_name = frame.chunk().constant_at(name_idx)?;
-                if let Value::Object(Object::String(name_ref)) = global_name {
-                    if let Some(value) = frame.globals.get(name_ref) {
-                        frame.push(value)?;
-                        Ok(RuntimeAction::Continue)
-                    } else {
-                        Err(RuntimeError::UndefinedVariable {
-                            name: global_name.print(),
-                            span: frame.previous_opcode_location()?.span,
-                        }
-                        .into())
-                    }
+                let name = frame.next_string_ref("GetGlobal")?;
+                if let Some(value) = frame.globals.get(&name) {
+                    frame.push(value)?;
+                    Ok(RuntimeAction::Continue)
                 } else {
-                    Err(RuntimeError::Bug {
-                        message:
-                            "GetGlobal instruction somehow points at something other than a string",
+                    Err(RuntimeError::UndefinedVariable {
+                        name: name.to_string(),
                         span: frame.previous_opcode_location()?.span,
                     }
                     .into())
                 }
             }
             Opcode::DefineGlobal => {
-                let name_idx = frame.next_byte()?;
-                let global_name = frame.chunk().constant_at(name_idx)?;
-                if let Value::Object(Object::String(name_ref)) = global_name {
-                    let _ = frame.globals.set(Arc::clone(name_ref), frame.peek(0));
-                    frame.pop()?;
-                    Ok(RuntimeAction::Continue)
-                } else {
-                    Err(RuntimeError::Bug {
-                        message:
-                            "DefineGlobal instruction somehow points at something other than a string",
-                        span: frame.previous_opcode_location()?.span,
-                    }
-                    .into())
-                }
+                let name = frame.next_string_ref("DefineGlobal")?;
+                let _ = frame.globals.set(name, frame.peek(0));
+                frame.pop()?;
+                Ok(RuntimeAction::Continue)
             }
             Opcode::SetGlobal => {
-                let name_idx = frame.next_byte()?;
-                let global_name = frame.chunk().constant_at(name_idx)?.clone();
-                if let Value::Object(Object::String(name_ref)) = global_name {
-                    if frame.globals.set(Arc::clone(&name_ref), frame.peek(0)) {
-                        // If we inserted a new value, then the variable wasn't declared, so we
-                        // take it back out and return an error
-                        frame.globals.delete(&name_ref);
+                let name = frame.next_string_ref("SetGlobal")?;
+                if frame.globals.set(Arc::clone(&name), frame.peek(0)) {
+                    // If we inserted a new value, then the variable wasn't declared, so we
+                    // take it back out and return an error
+                    frame.globals.delete(&name);
 
-                        Err(RuntimeError::UndefinedVariable {
-                            name: name_ref.to_string(),
-                            span: frame.previous_opcode_location()?.span,
-                        }
-                        .into())
-                    } else {
-                        // If we overwrote an existing value, all's well
-                        Ok(RuntimeAction::Continue)
-                    }
-                } else {
-                    Err(RuntimeError::Bug {
-                        message:
-                            "SetGlobal instruction somehow points at something other than a string",
+                    Err(RuntimeError::UndefinedVariable {
+                        name: name.to_string(),
                         span: frame.previous_opcode_location()?.span,
                     }
                     .into())
+                } else {
+                    // If we overwrote an existing value, all's well
+                    Ok(RuntimeAction::Continue)
                 }
             }
             Opcode::GetUpvalue => {
@@ -456,68 +461,55 @@ impl VM<Running> {
                 Ok(RuntimeAction::Continue)
             }
             Opcode::GetProperty => {
-                let property_name_idx = frame.next_byte()?;
-                let property_name = frame.chunk().constant_at(property_name_idx)?;
-
-                if let Value::Object(Object::String(name_ref)) = property_name {
-                    let receiver = frame.peek(0);
-                    if let Value::Object(Object::Instance(ref instance_ref)) = receiver {
-                        if let Some(value) = instance_ref.get_field(name_ref) {
-                            frame.pop_ignore()?; // pop the receiver
-                            frame.push(value)?;
+                let property_name = frame.next_string_ref("GetProperty")?;
+                let receiver = frame.peek(0);
+                if let Value::Object(Object::Instance(ref instance_ref)) = receiver {
+                    if let Some(value) = instance_ref.get_field(&property_name) {
+                        frame.pop_ignore()?; // pop the receiver
+                        frame.push(value)?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        if let Some(method_impl) = instance_ref.class.lookup_method(&property_name)
+                        {
+                            frame.pop_ignore()?;
+                            frame.push(Value::Object(Object::BoundMethod(
+                                BoundMethodData::bind(receiver, method_impl),
+                            )))?;
                             Ok(RuntimeAction::Continue)
                         } else {
                             Err(RuntimeError::NoSuchProperty {
                                 receiver,
-                                property: name_ref.to_string(),
+                                property: property_name.to_string(),
                                 access_span: frame.previous_opcode_location()?.span,
                             }
                             .into())
                         }
-                    } else {
-                        Err(RuntimeError::BadPropertyAccess {
-                            receiver,
-                            property: name_ref.to_string(),
-                            operation: "get",
-                            access_span: frame.previous_opcode_location()?.span,
-                        }
-                        .into())
                     }
                 } else {
-                    Err(RuntimeError::Bug {
-                        message:
-                            "GetProperty instruction somehow points at something other than a string",
-                        span: frame.previous_opcode_location()?.span,
+                    Err(RuntimeError::BadPropertyAccess {
+                        receiver,
+                        property: property_name.to_string(),
+                        operation: "get",
+                        access_span: frame.previous_opcode_location()?.span,
                     }
                     .into())
                 }
             }
             Opcode::SetProperty => {
-                let property_name_idx = frame.next_byte()?;
-                let property_name = frame.chunk().constant_at(property_name_idx)?;
-
-                if let Value::Object(Object::String(name_ref)) = property_name {
-                    let receiver = frame.peek(1);
-                    if let Value::Object(Object::Instance(ref instance_ref)) = receiver {
-                        let _ = instance_ref.set_field(Arc::clone(name_ref), frame.peek(0));
-                        let new_value = frame.pop()?;
-                        frame.pop_ignore()?; // pop the receiver
-                        frame.push(new_value)?;
-                        Ok(RuntimeAction::Continue)
-                    } else {
-                        Err(RuntimeError::BadPropertyAccess {
-                            receiver,
-                            property: name_ref.to_string(),
-                            operation: "get",
-                            access_span: frame.previous_opcode_location()?.span,
-                        }
-                        .into())
-                    }
+                let property_name = frame.next_string_ref("SetProperty")?;
+                let receiver = frame.peek(1);
+                if let Value::Object(Object::Instance(ref instance_ref)) = receiver {
+                    let _ = instance_ref.set_field(property_name, frame.peek(0));
+                    let new_value = frame.pop()?;
+                    frame.pop_ignore()?; // pop the receiver
+                    frame.push(new_value)?;
+                    Ok(RuntimeAction::Continue)
                 } else {
-                    Err(RuntimeError::Bug {
-                        message:
-                            "SetProperty instruction somehow points at something other than a string",
-                        span: frame.previous_opcode_location()?.span,
+                    Err(RuntimeError::BadPropertyAccess {
+                        receiver,
+                        property: property_name.to_string(),
+                        operation: "get",
+                        access_span: frame.previous_opcode_location()?.span,
                     }
                     .into())
                 }
@@ -550,7 +542,8 @@ impl VM<Running> {
                         Ok(RuntimeAction::Continue)
                     } else {
                         Err(RuntimeError::Bug {
-                            message: "in Add: top two values on stack should've been numbers",
+                            message: "in Add: top two values on stack should've been numbers"
+                                .to_string(),
                             span: frame.previous_opcode_location()?.span,
                         }
                         .into())
@@ -567,7 +560,8 @@ impl VM<Running> {
                         Ok(RuntimeAction::Continue)
                     } else {
                         Err(RuntimeError::Bug {
-                            message: "in Add: top two values on stack should've been strings",
+                            message: "in Add: top two values on stack should've been strings"
+                                .to_string(),
                             span: frame.previous_opcode_location()?.span,
                         }
                         .into())
@@ -684,6 +678,9 @@ impl VM<Running> {
     fn call_value(&mut self, value: Value, arg_count: u8) -> Result<()> {
         match value {
             Value::Object(Object::Closure(closure)) => self.call_function(closure, arg_count),
+            Value::Object(Object::BoundMethod(bound_method)) => {
+                self.call_function(Arc::clone(&bound_method.method), arg_count)
+            }
             Value::Object(Object::Class(class)) => {
                 let new_instance = Value::Object(Object::Instance(InstanceData::of_class(&class)));
                 let arg_count = arg_count as usize;
@@ -950,7 +947,7 @@ pub enum RuntimeError {
     #[error("bug in VM: {message}")]
     #[diagnostic(code(runtime::internal::bug))]
     Bug {
-        message: &'static str,
+        message: String,
         #[label("here-ish")]
         span: (usize, usize),
     },

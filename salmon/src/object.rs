@@ -16,6 +16,7 @@ pub enum Object {
     Upvalue(Arc<UpvalueData>),
     Class(Arc<ClassData>),
     Instance(Arc<InstanceData>),
+    BoundMethod(Arc<BoundMethodData>),
 }
 
 impl Object {
@@ -47,6 +48,12 @@ impl Object {
             Object::Instance(data) => {
                 format!("#<{}:{:p}>", data.class.name.to_string(), Arc::as_ptr(data))
             }
+            Object::BoundMethod(data) => format!(
+                "<bound method {:?}.{}/{}>",
+                data.receiver,
+                data.method.function.debug_name(),
+                data.method.function.arity
+            ),
         }
     }
 
@@ -57,7 +64,8 @@ impl Object {
             | Object::Native(_)
             | Object::Upvalue(_)
             | Object::Class(_)
-            | Object::Instance(_) => self.show(),
+            | Object::Instance(_)
+            | Object::BoundMethod(_) => self.show(),
             Object::Closure(data) => Object::Function(Arc::clone(&data.function)).show(),
         }
     }
@@ -71,7 +79,8 @@ impl Debug for Object {
             | Object::Native(_)
             | Object::Upvalue(_)
             | Object::Class(_)
-            | Object::Instance(_) => {
+            | Object::Instance(_)
+            | Object::BoundMethod(_) => {
                 write!(f, "{}", self.show())
             }
             Object::Closure(data) => {
@@ -103,6 +112,9 @@ impl PartialEq for Object {
                 Arc::ptr_eq(this_data, other_data)
             }
             (Object::Instance(this_data), Object::Instance(other_data)) => {
+                Arc::ptr_eq(this_data, other_data)
+            }
+            (Object::BoundMethod(this_data), Object::BoundMethod(other_data)) => {
                 Arc::ptr_eq(this_data, other_data)
             }
             _ => false,
@@ -294,25 +306,21 @@ impl UpvalueData {
     }
 
     pub fn write(&self, stack: &mut [Value], new_value: Value) -> () {
-        if let Ok(mut state) = self.state.write() {
-            match state.deref_mut() {
-                UpvalueReference::Open => stack[self.slot] = new_value,
-                UpvalueReference::Closed(ref mut value) => *value = new_value,
-            }
+        let mut state = self.state.write().unwrap();
+        match state.deref_mut() {
+            UpvalueReference::Open => stack[self.slot] = new_value,
+            UpvalueReference::Closed(ref mut value) => *value = new_value,
         }
     }
 
     pub fn close(&self, stack: &[Value]) -> () {
-        if let Ok(mut state) = self.state.write() {
-            match state.deref_mut() {
-                UpvalueReference::Open => {
-                    let closed_value = stack[self.slot].clone();
-                    *state = UpvalueReference::Closed(closed_value);
-                }
-                // Attempting to re-close an already closed upvalue should never happen in practice.
-                // In theory, this should be an error of some kind, but we'll treat it as a no-op.
-                UpvalueReference::Closed(_) => (),
+        let mut state = self.state.write().unwrap();
+        match state.deref_mut() {
+            UpvalueReference::Open => {
+                let closed_value = stack[self.slot].clone();
+                *state = UpvalueReference::Closed(closed_value);
             }
+            UpvalueReference::Closed(_) => panic!("Attempted to close an already closed upvalue"),
         }
     }
 
@@ -330,13 +338,32 @@ impl UpvalueData {
 
 pub struct ClassData {
     pub name: Arc<StringData>,
+    methods: RwLock<Table>,
 }
 
 impl ClassData {
     pub fn new(name: &Arc<StringData>) -> Arc<ClassData> {
         Arc::new(ClassData {
             name: Arc::clone(name),
+            methods: RwLock::new(Table::new()),
         })
+    }
+
+    pub fn add_method(&self, method_name: Arc<StringData>, method_impl: Value) -> () {
+        let mut methods = self.methods.write().unwrap();
+        methods.set(method_name, method_impl);
+    }
+
+    pub fn lookup_method(&self, method_name: &Arc<StringData>) -> Option<Arc<ClosureData>> {
+        if let Ok(methods) = self.methods.read() {
+            if let Some(Value::Object(Object::Closure(method_impl))) = methods.get(method_name) {
+                Some(Arc::clone(&method_impl))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 
@@ -362,8 +389,18 @@ impl InstanceData {
     }
 
     pub fn set_field(&self, name: Arc<StringData>, value: Value) -> () {
-        if let Ok(mut fields) = self.fields.write() {
-            fields.set(name, value);
-        }
+        let mut fields = self.fields.write().unwrap();
+        fields.set(name, value);
+    }
+}
+
+pub struct BoundMethodData {
+    pub receiver: Value,
+    pub method: Arc<ClosureData>,
+}
+
+impl BoundMethodData {
+    pub fn bind(receiver: Value, method: Arc<ClosureData>) -> Arc<BoundMethodData> {
+        Arc::new(BoundMethodData { receiver, method })
     }
 }

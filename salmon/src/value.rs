@@ -13,6 +13,7 @@ pub enum DataType {
     Upvalue,
     Class,
     Instance,
+    BoundMethod,
     Nil,
 }
 
@@ -65,6 +66,7 @@ impl Value {
             Value::Object(Object::Upvalue(_)) => data_type == DataType::Upvalue,
             Value::Object(Object::Class(_)) => data_type == DataType::Class,
             Value::Object(Object::Instance(_)) => data_type == DataType::Instance,
+            Value::Object(Object::BoundMethod(_)) => data_type == DataType::BoundMethod,
             Value::Nil => data_type == DataType::Nil,
         }
     }
