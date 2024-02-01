@@ -22,14 +22,18 @@ pub trait VMState {}
 pub struct VM<S: VMState> {
     state: S,
     pub strings: Table,
+    init_string: Arc<StringData>,
     globals: Table,
     open_upvalues: BinaryHeap<Arc<UpvalueData>>,
 }
 
 pub fn new() -> VM<Stopped> {
+    let mut strings = Table::new();
+    let init_string = strings.intern_string("init");
     VM {
         state: Stopped { result: Ok(()) },
-        strings: Table::new(),
+        strings,
+        init_string,
         globals: Table::new(),
         open_upvalues: BinaryHeap::new(),
     }
@@ -685,19 +689,21 @@ impl VM<Running> {
             }
             Value::Object(Object::Class(class)) => {
                 let new_instance = Value::Object(Object::Instance(InstanceData::of_class(&class)));
-                let arg_count = arg_count as usize;
-                let initializer_frame_offset = self.state.stack_offset - arg_count - 1;
+                self.state.stack[self.state.stack_offset - (arg_count as usize) - 1] = new_instance;
 
-                // TODO(hollis): factor this "pop all the arguments and push the return value" behavior
-                while self.state.stack_offset > initializer_frame_offset {
-                    self.state.stack_offset -= 1;
-                    self.state.stack[self.state.stack_offset] = Value::Nil;
+                if let Some(initializer) = class.lookup_method(&self.init_string) {
+                    self.call_function(initializer, arg_count)
+                } else if arg_count != 0 {
+                    Err(RuntimeError::WrongNumberOfArguments {
+                        name: format!("{}#init/0", class.name.to_string()),
+                        got: arg_count,
+                        expected: 0,
+                        call_span: self.current_frame_view().previous_opcode_location()?.span,
+                    }
+                    .into())
+                } else {
+                    Ok(())
                 }
-
-                self.state.stack[self.state.stack_offset] = new_instance;
-                self.state.stack_offset += 1;
-
-                Ok(())
             }
             Value::Object(Object::Native(native)) => {
                 let arg_count = arg_count as usize;
@@ -705,6 +711,7 @@ impl VM<Running> {
                 let args = &self.state.stack[(native_frame_offset + 1)..self.state.stack_offset];
                 let return_value = (native.function)(arg_count, args)?;
 
+                // TODO(hollis): factor this "pop all the arguments and push the return value" behavior
                 while self.state.stack_offset > native_frame_offset {
                     self.state.stack_offset -= 1;
                     self.state.stack[self.state.stack_offset] = Value::Nil;
@@ -778,6 +785,7 @@ impl VM<Running> {
                 result: wrapped_result.context("Runtime Error"),
             },
             strings: self.strings,
+            init_string: self.init_string,
             globals: self.globals,
             open_upvalues: self.open_upvalues,
         }
@@ -823,6 +831,7 @@ impl VM<Stopped> {
         let running = VM {
             state: Running::new(toplevel_function),
             strings: self.strings,
+            init_string: self.init_string,
             globals: self.globals,
             open_upvalues: self.open_upvalues,
         };
@@ -838,6 +847,7 @@ impl VM<Stopped> {
         let running = VM {
             state: Running::new(toplevel_function),
             strings: self.strings,
+            init_string: self.init_string,
             globals: self.globals,
             open_upvalues: self.open_upvalues,
         };

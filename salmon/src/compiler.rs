@@ -44,13 +44,14 @@ struct LocalVariable<'a> {
 enum UnitType {
     Function,
     Method,
+    Initializer,
     Script,
 }
 
 impl UnitType {
     pub fn slot_zero_token(&self) -> Token<'static> {
         match self {
-            UnitType::Method => Token::this(),
+            UnitType::Method | UnitType::Initializer => Token::this(),
             _ => Token::blank_name(),
         }
     }
@@ -128,10 +129,24 @@ impl<'a> CompilerState<'a> {
         mut self,
         source_location: SourceLocation,
     ) -> (CompilerState<'a>, Arc<FunctionData>, Vec<Upvalue>) {
-        self.compilation_unit
-            .chunk
-            .write_byte(Opcode::Nil as u8, source_location.clone())
-            .write_byte(Opcode::Return as u8, source_location);
+        if self.unit_type == UnitType::Initializer {
+            // Initializers end with:
+            //   GetLocal 0x00
+            //   Return
+            self.compilation_unit
+                .chunk
+                .write_byte(Opcode::GetLocal as u8, source_location.clone())
+                .write_byte(0, source_location.clone())
+                .write_byte(Opcode::Return as u8, source_location);
+        } else {
+            // Any other function ends with:
+            //   Nil
+            //   Return
+            self.compilation_unit
+                .chunk
+                .write_byte(Opcode::Nil as u8, source_location.clone())
+                .write_byte(Opcode::Return as u8, source_location);
+        }
         let finished_function = self.compilation_unit.finalize();
         let parent = self
             .enclosing
@@ -524,7 +539,7 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
 
     parser.consume(TokenType::LeftBrace, "expected '{' before a class body")?;
     while !parser.check_token(TokenType::RightBrace) && !parser.check_token(TokenType::EOF) {
-        method_declarartion(parser)?;
+        method_declaration(parser)?;
     }
     parser.consume(TokenType::RightBrace, "expected '}' after a class body")?;
     parser.emit_byte(Opcode::Pop as u8);
@@ -534,13 +549,20 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
     Ok(())
 }
 
-fn method_declarartion(parser: &mut Parser) -> Result<()> {
+fn method_declaration(parser: &mut Parser) -> Result<()> {
     parser.consume(TokenType::Identifier, "expected a method name")?;
     let name_token = parser.previous.clone();
     let global_id = parser.identifier_constant(&name_token)?;
     let name_location = name_token.location();
 
-    build_function(parser, UnitType::Method)?;
+    build_function(
+        parser,
+        if name_token.lexeme == "init" {
+            UnitType::Initializer
+        } else {
+            UnitType::Method
+        },
+    )?;
 
     parser.emit_bytes_at(&[Opcode::Method as u8, global_id], name_location);
 
@@ -760,21 +782,42 @@ fn if_statement(parser: &mut Parser) -> Result<()> {
 fn return_statement(parser: &mut Parser) -> Result<()> {
     if parser.compiler.unit_type == UnitType::Script {
         return Err(ParseError::BadReturn {
+            from_where: "a toplevel script",
+            help_str: "Return statements are only allowed in function and method bodies.",
             bad_return_span: parser.previous.error_span(),
         }
         .into());
     }
 
-    if parser.match_token(TokenType::Semicolon) {
-        Ok(parser.emit_bytes(&[Opcode::Nil as u8, Opcode::Return as u8]))
+    if parser.compiler.unit_type == UnitType::Initializer {
+        if parser.match_token(TokenType::Semicolon) {
+            // Initializers end with:
+            //   GetLocal 0x00
+            //   Return
+            Ok(parser.emit_bytes(&[Opcode::GetLocal as u8, 0, Opcode::Return as u8]))
+        } else {
+            Err(ParseError::BadReturn {
+                from_where: "from an initializer method",
+                help_str: "Initializer methods may only contain blank return statements.",
+                bad_return_span: parser.previous.error_span(),
+            }
+            .into())
+        }
     } else {
-        let return_location = parser.previous.location();
-        expression(parser)?;
-        parser.consume(
-            TokenType::Semicolon,
-            "expected a ';' at the end of a return statement",
-        )?;
-        Ok(parser.emit_byte_at(Opcode::Return as u8, return_location))
+        if parser.match_token(TokenType::Semicolon) {
+            // Any other function ends with:
+            //   Nil
+            //   Return
+            Ok(parser.emit_bytes(&[Opcode::Nil as u8, Opcode::Return as u8]))
+        } else {
+            let return_location = parser.previous.location();
+            expression(parser)?;
+            parser.consume(
+                TokenType::Semicolon,
+                "expected a ';' at the end of a return statement",
+            )?;
+            Ok(parser.emit_byte_at(Opcode::Return as u8, return_location))
+        }
     }
 }
 
@@ -1379,12 +1422,11 @@ pub enum ParseError {
     JumpTooLong {
         approx_jump_location: (usize, usize),
     },
-    #[error("attempted to return from a toplevel scope")]
-    #[diagnostic(
-        code(compiler::bad_return),
-        help("Return statements are only valid with function or method bodies.")
-    )]
+    #[error("attempted to return from {from_where}")]
+    #[diagnostic(code(compiler::bad_return), help("{help_str}"))]
     BadReturn {
+        from_where: &'static str,
+        help_str: &'static str,
         #[label("here")]
         bad_return_span: (usize, usize),
     },
