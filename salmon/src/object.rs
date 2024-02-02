@@ -365,6 +365,11 @@ impl ClassData {
             None
         }
     }
+
+    pub fn method_names(&self) -> Vec<Arc<StringData>> {
+        let methods = self.methods.read().unwrap();
+        methods.keys()
+    }
 }
 
 pub struct InstanceData {
@@ -391,6 +396,11 @@ impl InstanceData {
     pub fn set_field(&self, name: Arc<StringData>, value: Value) -> () {
         let mut fields = self.fields.write().unwrap();
         fields.set(name, value);
+    }
+
+    pub fn field_names(&self) -> Vec<Arc<StringData>> {
+        let fields = self.fields.read().unwrap();
+        fields.keys()
     }
 }
 

@@ -86,6 +86,7 @@ fn disassemble_instruction_at(
         Opcode::JumpIfFalse => render_jump_instruction("Jump If False", true, offset, chunk, line),
         Opcode::Loop => render_jump_instruction("Loop", false, offset, chunk, line),
         Opcode::Call => render_call_instruction("Call", offset, chunk, line),
+        Opcode::Invoke => render_invoke_instruction("Invoke", offset, chunk, line),
         Opcode::Closure => render_closure_instruction("Closure", offset, chunk, line, indent),
         Opcode::CloseUpvalue => render_simple_instruction("Close Upvalue", offset, line),
         Opcode::Return => render_simple_instruction("Return", offset, line),
@@ -173,6 +174,25 @@ fn render_call_instruction(
     writeln!(line, "  /{} ", arg_count).into_diagnostic()?;
 
     Ok(offset + 2)
+}
+
+fn render_invoke_instruction(
+    instr_name: &str,
+    offset: usize,
+    chunk: &Chunk,
+    line: &mut Buffer,
+) -> Result<usize> {
+    color(line, Color::Green)?;
+    write!(line, "{:-16}", instr_name).into_diagnostic()?;
+
+    let method_name_idx = *chunk.byte(offset + 1)?;
+    let arg_count = *chunk.byte(offset + 2)?;
+    color(line, Color::White)?;
+    write!(line, "  0x{:02x} /{} ", method_name_idx, arg_count).into_diagnostic()?;
+    color(line, Color::Blue)?;
+    writeln!(line, "(.{})", chunk.constant_at(method_name_idx)?.print()).into_diagnostic()?;
+
+    Ok(offset + 3)
 }
 
 fn render_jump_instruction(

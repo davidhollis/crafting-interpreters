@@ -120,4 +120,5 @@ fn run_repl(opts: &Salmon) -> Result<()> {
 fn install_stdlib(vm: &mut VM<Stopped>) -> () {
     vm.register_native("clock", native::clock);
     vm.register_native("debug_closure", native::debug_closure);
+    vm.register_native("debug_object", native::debug_object);
 }

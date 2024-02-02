@@ -68,6 +68,19 @@ impl Table {
         }
     }
 
+    pub fn keys(&self) -> Vec<Arc<StringData>> {
+        let mut keys = Vec::with_capacity(self.count);
+
+        for entry in self.entries.iter() {
+            match entry {
+                Entry::Full { key, .. } => keys.push(Arc::clone(&key)),
+                _ => (),
+            }
+        }
+
+        keys
+    }
+
     pub fn delete(&mut self, key: &Arc<StringData>) -> bool {
         if self.count == 0 {
             false

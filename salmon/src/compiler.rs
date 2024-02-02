@@ -1067,6 +1067,14 @@ fn dot(parser: &mut Parser, can_assign: bool) -> Result<()> {
             property_name.location(),
         );
         Ok(())
+    } else if parser.match_token(TokenType::LeftParen) {
+        let open_paren_location = parser.previous.location();
+        let arg_count = argument_list(parser)?;
+        parser.emit_bytes_at(
+            &[Opcode::Invoke as u8, name_idx, arg_count],
+            open_paren_location,
+        );
+        Ok(())
     } else {
         parser.emit_bytes_at(
             &[Opcode::GetProperty as u8, name_idx],

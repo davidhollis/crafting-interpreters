@@ -315,6 +315,13 @@ impl VM<Running> {
                 self.call_value(function, arg_count)?;
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::Invoke => {
+                let method = frame.next_string_ref("Invoke")?;
+                let arg_count = frame.next_byte()?;
+                let receiver = frame.peek(arg_count as usize);
+                self.invoke(receiver, method, arg_count)?;
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Closure => {
                 let const_idx = frame.next_byte()?;
                 match frame.chunk().constant_at(const_idx)? {
@@ -736,6 +743,55 @@ impl VM<Running> {
         }
     }
 
+    fn invoke(
+        &mut self,
+        receiver: Value,
+        method_name: Arc<StringData>,
+        arg_count: u8,
+    ) -> Result<()> {
+        if let Value::Object(Object::Instance(receiver)) = receiver {
+            if let Some(field) = receiver.get_field(&method_name) {
+                // We have a field with the given name, so try to call that instead of looking in
+                // the method table
+                self.state.stack[self.state.stack_offset - (arg_count as usize) - 1] =
+                    field.clone();
+                self.call_value(field, arg_count)
+            } else {
+                self.invoke_from_class(&receiver.class, method_name, arg_count)
+            }
+        } else {
+            let invoke_location = self
+                .current_frame_view()
+                .previous_opcode_location()?
+                .clone();
+            Err(RuntimeError::BadPropertyAccess {
+                receiver,
+                property: method_name.to_string(),
+                operation: "invoke",
+                access_span: invoke_location.span,
+            }
+            .into())
+        }
+    }
+
+    fn invoke_from_class(
+        &mut self,
+        class: &Arc<ClassData>,
+        method_name: Arc<StringData>,
+        arg_count: u8,
+    ) -> Result<()> {
+        if let Some(method_impl) = class.lookup_method(&method_name) {
+            self.call_function(method_impl, arg_count)
+        } else {
+            Err(RuntimeError::NoSuchMethod {
+                class_name: class.name.to_string(),
+                method_name: method_name.to_string(),
+                call_span: self.current_frame_view().previous_opcode_location()?.span,
+            }
+            .into())
+        }
+    }
+
     fn call_function(&mut self, closure: Arc<ClosureData>, arg_count: u8) -> Result<()> {
         if closure.function.arity != arg_count as usize {
             return Err(RuntimeError::WrongNumberOfArguments {
@@ -955,6 +1011,14 @@ pub enum RuntimeError {
         property: String,
         #[label("accessed here")]
         access_span: (usize, usize),
+    },
+    #[error("class {class_name} has no method '{method_name}'")]
+    #[diagnostic(code(runtime::no_such_method))]
+    NoSuchMethod {
+        class_name: String,
+        method_name: String,
+        #[label("called here")]
+        call_span: (usize, usize),
     },
     #[error("bug in VM: {message}")]
     #[diagnostic(code(runtime::internal::bug))]
