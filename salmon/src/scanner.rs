@@ -104,7 +104,7 @@ pub struct Token<'a> {
 }
 
 impl Token<'_> {
-    pub fn empty() -> Token<'static> {
+    pub fn empty_token() -> Token<'static> {
         Token {
             tpe: TokenType::EOF,
             lexeme: "",
@@ -113,7 +113,7 @@ impl Token<'_> {
         }
     }
 
-    pub fn blank_name() -> Token<'static> {
+    pub fn blank_name_token() -> Token<'static> {
         Token {
             tpe: TokenType::Identifier,
             lexeme: "",
@@ -122,10 +122,19 @@ impl Token<'_> {
         }
     }
 
-    pub fn this() -> Token<'static> {
+    pub fn this_token() -> Token<'static> {
         Token {
             tpe: TokenType::This,
             lexeme: "this",
+            source_offset: 0,
+            line: 0,
+        }
+    }
+
+    pub fn super_token() -> Token<'static> {
+        Token {
+            tpe: TokenType::Super,
+            lexeme: "super",
             source_offset: 0,
             line: 0,
         }
@@ -139,6 +148,17 @@ impl Token<'_> {
         SourceLocation {
             span: self.error_span(),
             line: self.line,
+        }
+    }
+}
+
+impl<'a> Token<'a> {
+    pub fn at_location(self, location: &SourceLocation) -> Self {
+        Token {
+            tpe: self.tpe,
+            lexeme: self.lexeme,
+            source_offset: location.span.0,
+            line: location.line,
         }
     }
 }

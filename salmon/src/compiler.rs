@@ -51,8 +51,8 @@ enum UnitType {
 impl UnitType {
     pub fn slot_zero_token(&self) -> Token<'static> {
         match self {
-            UnitType::Method | UnitType::Initializer => Token::this(),
-            _ => Token::blank_name(),
+            UnitType::Method | UnitType::Initializer => Token::this_token(),
+            _ => Token::blank_name_token(),
         }
     }
 }
@@ -185,7 +185,17 @@ impl<'a> CompilerState<'a> {
     }
 }
 
-struct CurrentClass {}
+struct CurrentClass {
+    has_superclass: bool,
+}
+
+impl CurrentClass {
+    fn new() -> CurrentClass {
+        CurrentClass {
+            has_superclass: false,
+        }
+    }
+}
 
 struct Parser<'a> {
     scanner: Scanner<'a>,
@@ -204,8 +214,8 @@ impl<'a> Parser<'a> {
         strings.add_all(preloaded_strings);
         Parser {
             scanner,
-            previous: Token::empty(),
-            current: Token::empty(),
+            previous: Token::empty_token(),
+            current: Token::empty_token(),
             compiler: CompilerState::new_toplevel(UnitType::Script),
             strings,
             current_class: None,
@@ -524,18 +534,58 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
 
     if !parser.is_global_scope() {
         declare_local_variable(parser, name_token.clone())?;
-        parser.mark_last_initialized();
     }
+
+    let enclosing_class = std::mem::replace(&mut parser.current_class, Some(CurrentClass::new()));
 
     parser.emit_bytes_at(&[Opcode::Class as u8, global_id], name_location.clone());
 
-    if parser.is_global_scope() {
-        define_global_variable(parser, global_id, name_location);
+    if parser.match_token(TokenType::Less) {
+        // We have a supeclass
+        let superclass_sigil_location = parser.previous.location();
+        expression(parser)?;
+        if let Some(ref mut class) = &mut parser.current_class {
+            class.has_superclass = true;
+        }
+
+        // Stack is now [class][superclass]
+
+        if parser.is_global_scope() {
+            parser.emit_byte_at(Opcode::Swap as u8, superclass_sigil_location.clone());
+
+            // Stack is now [superclass][class]
+
+            define_global_variable(parser, global_id, name_location);
+
+            // Stack is now [superclass]
+        } else {
+            parser.mark_last_initialized();
+
+            // Stack is now [class (local variable)][superclass]
+        }
+
+        parser.begin_scope();
+        parser.add_local_variable(Token::super_token().at_location(&superclass_sigil_location))?;
+        parser.mark_last_initialized();
+
+        // Stack is now [...]{ [superclass (local variable)][class] }
+
+        resolve_variable_expression(parser, &name_token, false)?;
+
+        // Stack is now [...]{ [superclass (local variable)][class] }
+
+        parser.emit_byte_at(Opcode::Inherit as u8, superclass_sigil_location);
+
+        // Stack is now [...]{ [superclass (local variable)][class] }
+    } else {
+        if parser.is_global_scope() {
+            define_global_variable(parser, global_id, name_location);
+        } else {
+            parser.mark_last_initialized();
+        }
+
+        resolve_variable_expression(parser, &name_token, false)?;
     }
-
-    let enclosing_class = std::mem::replace(&mut parser.current_class, Some(CurrentClass {}));
-
-    resolve_variable_expression(parser, &name_token, false)?;
 
     parser.consume(TokenType::LeftBrace, "expected '{' before a class body")?;
     while !parser.check_token(TokenType::RightBrace) && !parser.check_token(TokenType::EOF) {
@@ -543,6 +593,15 @@ fn class_declaration(parser: &mut Parser) -> Result<()> {
     }
     parser.consume(TokenType::RightBrace, "expected '}' after a class body")?;
     parser.emit_byte(Opcode::Pop as u8);
+
+    if parser
+        .current_class
+        .as_ref()
+        .map(|c| c.has_superclass)
+        .unwrap_or(false)
+    {
+        parser.end_scope();
+    }
 
     parser.current_class = enclosing_class;
 
@@ -958,6 +1017,47 @@ fn variable(parser: &mut Parser, can_assign: bool) -> Result<()> {
     resolve_variable_expression(parser, &parser.previous.clone(), can_assign)
 }
 
+fn super_call(parser: &mut Parser, _can_assign: bool) -> Result<()> {
+    let super_location = parser.previous.location();
+
+    if let Some(ref class) = &parser.current_class {
+        if !class.has_superclass {
+            return Err(ParseError::InvalidSuperReference {
+                place: "in a class with no superclass",
+                bad_super_span: super_location.span,
+            }
+            .into());
+        }
+    } else {
+        return Err(ParseError::InvalidSuperReference {
+            place: "outside of a class declaration",
+            bad_super_span: super_location.span,
+        }
+        .into());
+    }
+
+    parser.consume(TokenType::Dot, "expected '.' after 'super'")?;
+    parser.consume(TokenType::Identifier, "expected superclass method name")?;
+    let method_name_token = parser.previous.clone();
+    let name_idx = parser.identifier_constant(&method_name_token)?;
+
+    resolve_variable_expression(
+        parser,
+        &Token::this_token().at_location(&super_location),
+        false,
+    )?;
+    resolve_variable_expression(
+        parser,
+        &Token::super_token().at_location(&super_location),
+        false,
+    )?;
+
+    Ok(parser.emit_bytes_at(
+        &[Opcode::GetSuper as u8, name_idx],
+        method_name_token.location(),
+    ))
+}
+
 fn this(parser: &mut Parser, _can_assign: bool) -> Result<()> {
     if parser.current_class.is_none() {
         return Err(ParseError::InvalidSelfReference {
@@ -1336,7 +1436,7 @@ const RULES: [ParseRule; 39] = [
     // TokenType::Return
     ParseRule { prefix: None, infix: None, precedence: Precedence::None },
     // TokenType::Super
-    ParseRule { prefix: None, infix: None, precedence: Precedence::None },
+    ParseRule { prefix: Some(super_call), infix: None, precedence: Precedence::None },
     // TokenType::This
     ParseRule { prefix: Some(this), infix: None, precedence: Precedence::None },
     // TokenType::True
@@ -1443,6 +1543,13 @@ pub enum ParseError {
     InvalidSelfReference {
         #[label("here")]
         bad_this_span: (usize, usize),
+    },
+    #[error("attempted to refer to 'super' {place}")]
+    #[diagnostic(code(compiler::invalid_super_reference))]
+    InvalidSuperReference {
+        place: &'static str,
+        #[label("here")]
+        bad_super_span: (usize, usize),
     },
     #[error("failed to produce bytecode due to the following error(s)")]
     #[diagnostic(code(compiler::no_bytecode))]

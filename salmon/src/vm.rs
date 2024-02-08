@@ -379,6 +379,27 @@ impl VM<Running> {
                 frame.push(Value::Object(Object::Class(ClassData::new(&class_name))))?;
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::Inherit => {
+                let superclass = frame.peek(1);
+                let subclass = frame.peek(0);
+
+                if let (
+                    Value::Object(Object::Class(ref superclass_data)),
+                    Value::Object(Object::Class(ref subclass_data)),
+                ) = (&superclass, &subclass)
+                {
+                    subclass_data.inherit_from(superclass_data);
+                    Ok(RuntimeAction::Continue)
+                } else {
+                    Err(RuntimeError::TypeErrorBinary {
+                        op_symbol: "<inherit>",
+                        lvalue: superclass,
+                        rvalue: subclass,
+                        span: frame.previous_opcode_location()?.span,
+                    }
+                    .into())
+                }
+            }
             Opcode::Method => {
                 let method_name = frame.next_string_ref("Method")?;
                 let method_impl = frame.peek(0);
@@ -409,7 +430,14 @@ impl VM<Running> {
                 }
             }
             Opcode::Pop => {
-                let _ = frame.pop()?;
+                frame.pop_ignore()?;
+                Ok(RuntimeAction::Continue)
+            }
+            Opcode::Swap => {
+                let first = frame.pop()?;
+                let second = frame.pop()?;
+                frame.push(first)?;
+                frame.push(second)?;
                 Ok(RuntimeAction::Continue)
             }
             Opcode::GetLocal => {
@@ -523,6 +551,43 @@ impl VM<Running> {
                         access_span: frame.previous_opcode_location()?.span,
                     }
                     .into())
+                }
+            }
+            Opcode::GetSuper => {
+                let method_name = frame.next_string_ref("GetSuper")?;
+                let superclass = frame.pop()?;
+                let receiver = frame.peek(0);
+
+                if let Value::Object(Object::Class(superclass_data)) = &superclass {
+                    if let Value::Object(Object::Instance(_)) = &receiver {
+                        if let Some(method_impl) = superclass_data.lookup_method(&method_name) {
+                            frame.pop_ignore()?;
+                            frame.push(Value::Object(Object::BoundMethod(
+                                BoundMethodData::bind(receiver, method_impl),
+                            )))?;
+                            Ok(RuntimeAction::Continue)
+                        } else {
+                            Err(RuntimeError::NoSuchProperty {
+                                receiver: superclass,
+                                property: method_name.to_string(),
+                                access_span: frame.previous_opcode_location()?.span,
+                            }
+                            .into())
+                        }
+                    } else {
+                        Err(RuntimeError::BadPropertyAccess {
+                            receiver,
+                            property: method_name.to_string(),
+                            operation: "get",
+                            access_span: frame.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                } else {
+                    Err(RuntimeError::Bug {
+                        message: "local variable 'super' somehow pointed at something that wasn't a class".to_string(),
+                        span: frame.previous_opcode_location()?.span,
+                    }.into())
                 }
             }
             Opcode::Equal => {

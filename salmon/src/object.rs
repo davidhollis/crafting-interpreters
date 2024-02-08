@@ -370,6 +370,13 @@ impl ClassData {
         let methods = self.methods.read().unwrap();
         methods.keys()
     }
+
+    pub fn inherit_from(&self, other: &Arc<ClassData>) -> () {
+        let mut this_methods = self.methods.write().unwrap();
+        let other_methods = other.methods.read().unwrap();
+
+        this_methods.add_all(&other_methods);
+    }
 }
 
 pub struct InstanceData {

@@ -13,6 +13,7 @@ pub enum Opcode {
     True,
     False,
     Pop,
+    Swap,
     GetLocal,
     SetLocal,
     GetGlobal,
@@ -22,6 +23,7 @@ pub enum Opcode {
     SetUpvalue,
     GetProperty,
     SetProperty,
+    GetSuper,
     Equal,
     Greater,
     Less,
@@ -42,6 +44,7 @@ pub enum Opcode {
     Return,
     Class,
     Method,
+    Inherit,
 }
 
 impl Opcode {
