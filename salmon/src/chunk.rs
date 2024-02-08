@@ -39,6 +39,7 @@ pub enum Opcode {
     Loop,
     Call,
     Invoke,
+    InvokeSuper,
     Closure,
     CloseUpvalue,
     Return,

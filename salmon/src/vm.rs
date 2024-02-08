@@ -322,6 +322,21 @@ impl VM<Running> {
                 self.invoke(receiver, method, arg_count)?;
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::InvokeSuper => {
+                let method_name = frame.next_string_ref("InvokeSuper")?;
+                let arg_count = frame.next_byte()?;
+                let superclass = frame.pop()?;
+
+                if let Value::Object(Object::Class(ref superclass)) = superclass {
+                    self.invoke_from_class(superclass, method_name, arg_count)?;
+                    Ok(RuntimeAction::Continue)
+                } else {
+                    Err(RuntimeError::Bug {
+                        message: "local variable 'super' somehow pointed at something that wasn't a class".to_string(),
+                        span: frame.previous_opcode_location()?.span,
+                    }.into())
+                }
+            }
             Opcode::Closure => {
                 let const_idx = frame.next_byte()?;
                 match frame.chunk().constant_at(const_idx)? {

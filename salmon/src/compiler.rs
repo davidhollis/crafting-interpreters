@@ -1046,16 +1046,33 @@ fn super_call(parser: &mut Parser, _can_assign: bool) -> Result<()> {
         &Token::this_token().at_location(&super_location),
         false,
     )?;
-    resolve_variable_expression(
-        parser,
-        &Token::super_token().at_location(&super_location),
-        false,
-    )?;
 
-    Ok(parser.emit_bytes_at(
-        &[Opcode::GetSuper as u8, name_idx],
-        method_name_token.location(),
-    ))
+    if parser.match_token(TokenType::LeftParen) {
+        let left_parent_location = parser.previous.location();
+        let arg_count = argument_list(parser)?;
+
+        resolve_variable_expression(
+            parser,
+            &Token::super_token().at_location(&super_location),
+            false,
+        )?;
+
+        Ok(parser.emit_bytes_at(
+            &[Opcode::InvokeSuper as u8, name_idx, arg_count],
+            left_parent_location,
+        ))
+    } else {
+        resolve_variable_expression(
+            parser,
+            &Token::super_token().at_location(&super_location),
+            false,
+        )?;
+
+        Ok(parser.emit_bytes_at(
+            &[Opcode::GetSuper as u8, name_idx],
+            method_name_token.location(),
+        ))
+    }
 }
 
 fn this(parser: &mut Parser, _can_assign: bool) -> Result<()> {
@@ -1135,7 +1152,7 @@ fn resolve_upvalue(compiler_state: &mut CompilerState, name_token: &Token) -> Re
         }
     }
 
-    // If there is no enclosign scope or we didn't find a matching local or upvalue, then we
+    // If there is no enclosing scope or we didn't find a matching local or upvalue, then we
     // couldn't resolve it. It must be a global.
     Ok(None)
 }
