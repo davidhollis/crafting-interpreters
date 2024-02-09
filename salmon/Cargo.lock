@@ -428,7 +428,7 @@ dependencies = [
 
 [[package]]
 name = "salmon"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "from_u8",

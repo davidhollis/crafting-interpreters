@@ -22,8 +22,12 @@ struct Salmon {
     script_path: Option<PathBuf>,
 
     /// Trace execution, outputting VM state as the program runs.
-    #[arg(long)]
-    debug: bool,
+    #[arg(long, short)]
+    trace: bool,
+
+    /// Do not run the script, simply output a human-readable transcription of the compiled bytecode.
+    #[arg(long, short)]
+    dump_bytecode: bool,
 }
 
 fn main() -> Result<()> {
@@ -46,7 +50,12 @@ fn run_file(path: &PathBuf, opts: &Salmon) -> Result<()> {
     let bytecode = compile(&script_file, &vm.strings)
         .map_err(|err| err.with_source_code(NamedSource::new(file_name, script_file.clone())))?;
 
-    let vm = if opts.debug {
+    if opts.dump_bytecode {
+        debug::disassemble_chunk(file_name, &bytecode.chunk)?;
+        return Ok(());
+    }
+
+    let vm = if opts.trace {
         debug::disassemble_chunk(file_name, &bytecode.chunk)?;
         vm.trace(bytecode, &mut debug::DisassemblingTracer::new())
     } else {
@@ -94,7 +103,7 @@ fn run_repl(opts: &Salmon) -> Result<()> {
                         current_segment.clear();
 
                         // Execute the compiled code.
-                        vm = if opts.debug {
+                        vm = if opts.trace {
                             debug::disassemble_chunk(
                                 &format!("repl cell {}", cell_number),
                                 &code.chunk,
