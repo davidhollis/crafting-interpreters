@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     chunk::{DebugSymbol, Opcode},
     object::{FunctionData, Object, StringData},
-    scanner::{Scanner, SourceLocation, StringLiteralScanner, Token, TokenType},
+    scanner::{Scanner, ScannerError, SourceLocation, StringLiteralScanner, Token, TokenType},
     table::Table,
     value::Value,
     vm,
@@ -21,14 +21,11 @@ pub fn compile(source_code: &str, vm_strings: &Table) -> Result<Arc<FunctionData
 
 pub fn compile_repl(
     source_code: &str,
-    line: usize,
     starting_at: usize,
     vm_strings: &Table,
 ) -> Result<Arc<FunctionData>> {
-    let mut parser = Parser::new_with_strings(
-        Scanner::new_repl(source_code, line, starting_at),
-        vm_strings,
-    );
+    let mut parser =
+        Parser::new_with_strings(Scanner::new_repl(source_code, starting_at), vm_strings);
 
     parser.parse();
     parser.finalize()
@@ -258,6 +255,7 @@ impl<'a> Parser<'a> {
         } else {
             Err(ParseError::UnexpectedToken {
                 message: err_message.to_string(),
+                got: self.current.tpe,
                 token_span: self.current.error_span(),
                 line: self.current.line,
             }
@@ -391,6 +389,9 @@ impl<'a> Parser<'a> {
             self.panic_mode = true;
             if err.is::<ParseError>() {
                 self.errors.push(err.downcast().unwrap());
+            } else if err.is::<ScannerError>() {
+                self.errors
+                    .push(ParseError::WrappedScannerError(err.downcast().unwrap()))
             } else {
                 println!("{:?}", err);
             }
@@ -509,10 +510,6 @@ impl<'a> Parser<'a> {
         (resulting_function, upvalues)
     }
 }
-
-// TODO(hollis): I'm not happy with the organization of this module
-//               Some of these need to be separate functions so they can be included in the table,
-//               but others could very realistically be associated functions on Parser
 
 fn declaration(parser: &mut Parser) -> Result<()> {
     if parser.match_token(TokenType::Class) {
@@ -1494,15 +1491,16 @@ const RULES: [ParseRule; 39] = [
 
 #[derive(Error, Debug, Diagnostic)]
 pub enum ParseError {
-    #[error("{message} at line {line}")]
+    #[error("{message}")]
     #[diagnostic(code(parser::unexpected_token))]
     UnexpectedToken {
         message: String,
+        got: TokenType,
         #[label("here")]
         token_span: (usize, usize),
         line: usize,
     },
-    #[error("bad {kind} literal at line {line}")]
+    #[error("bad {kind} literal")]
     #[diagnostic(code(parser::bad_literal))]
     BadLiteral {
         kind: &'static str,
@@ -1600,14 +1598,30 @@ pub enum ParseError {
     #[error("bug in compiler at {0}. Condition should be unreachable.")]
     #[diagnostic(code(compiler::bug))]
     Bug(&'static str),
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    WrappedScannerError(ScannerError),
 }
 
 impl ParseError {
     fn vanilla_unexpected(token: &Token) -> ParseError {
         ParseError::UnexpectedToken {
             message: format!("unexpected {:?}", token.tpe),
+            got: token.tpe,
             token_span: token.error_span(),
             line: token.line,
+        }
+    }
+
+    pub fn can_continue(&self) -> bool {
+        match self {
+            ParseError::UnexpectedToken {
+                got: TokenType::EOF,
+                ..
+            } => true,
+            ParseError::WrappedScannerError(ScannerError::UnexpectedEOFInString { .. }) => true,
+            ParseError::NoBytecode(errs) => errs.iter().all(|err| err.can_continue()),
+            _ => false,
         }
     }
 }

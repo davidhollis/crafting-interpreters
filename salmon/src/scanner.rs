@@ -186,11 +186,15 @@ impl Scanner<'_> {
         }
     }
 
-    pub fn new_repl(source: &str, line: usize, starting_at: usize) -> Scanner {
+    pub fn new_repl(source: &str, mut starting_at: usize) -> Scanner {
         let mut character_iter = source.char_indices().peekable();
+        let mut line = 1;
 
-        if starting_at > 0 {
-            let _ = character_iter.nth(starting_at - 1);
+        while starting_at > 0 {
+            if let Some((_, '\n')) = character_iter.next() {
+                line += 1;
+            }
+            starting_at -= 1;
         }
 
         Scanner {

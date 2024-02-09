@@ -4,13 +4,14 @@ use clap::Parser;
 use miette::{IntoDiagnostic, NamedSource, Result};
 use rustyline::error::ReadlineError;
 use salmon::{
-    compiler::{compile, compile_repl},
+    compiler::{compile, compile_repl, ParseError},
     debug::{self, DisassemblingTracer},
     native,
     vm::{Stopped, VM},
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const CONTINUATION_PROMPT: &str = "           | ";
 
 /// A lox interpreter in rust
 #[derive(Parser)]
@@ -61,35 +62,49 @@ fn run_repl(opts: &Salmon) -> Result<()> {
 
     let mut rl = rustyline::DefaultEditor::new().into_diagnostic()?;
     let mut vm = salmon::vm::new();
-    let mut line_number: usize = 1;
+    let mut cell_number: usize = 1;
     let mut tracer = DisassemblingTracer::new();
     let mut previous_source = String::new();
+    let mut current_segment = String::new();
 
     install_stdlib(&mut vm);
 
     loop {
-        match rl.readline(&format!("salmon:{:04}> ", line_number)) {
+        let base_prompt = format!("salmon:{:04}> ", cell_number);
+        match rl.readline(if current_segment.is_empty() {
+            &base_prompt
+        } else {
+            CONTINUATION_PROMPT
+        }) {
             Ok(line) => {
-                let _ = rl.add_history_entry(&line);
-                let full_source = previous_source.clone() + &line + "\n";
-                match compile_repl(
-                    &full_source,
-                    line_number,
-                    previous_source.len(),
-                    &vm.strings,
-                ) {
+                if current_segment.is_empty() {
+                    current_segment = line;
+                } else {
+                    current_segment.push('\n');
+                    current_segment.push_str(&line);
+                }
+                let full_source = previous_source.clone() + &current_segment + "\n";
+                match compile_repl(&full_source, previous_source.len(), &vm.strings) {
                     Ok(code) => {
+                        // We compiled! Commit the full source code so that runtime errors point at
+                        // the right offsets, and clear the current segment since previous_source
+                        // now includes it.
                         previous_source = full_source;
-                        line_number += 1;
+                        let _ = rl.add_history_entry(&current_segment);
+                        current_segment.clear();
+
+                        // Execute the compiled code.
                         vm = if opts.debug {
                             debug::disassemble_chunk(
-                                &format!("repl line {}", line_number),
+                                &format!("repl cell {}", cell_number),
                                 &code.chunk,
                             )?;
                             vm.trace(code, &mut tracer)
                         } else {
                             vm.interpret(code)
                         };
+
+                        // Report the error, if any.
                         let line_result;
                         (vm, line_result) = vm.extract_result();
                         if let Err(runtime_error) = line_result {
@@ -98,13 +113,33 @@ fn run_repl(opts: &Salmon) -> Result<()> {
                                 runtime_error.with_source_code(previous_source.clone())
                             );
                         }
+
+                        cell_number += 1;
                     }
                     Err(compile_error) => {
-                        // TODO(hollis): If we got some kind of unexpected EOF, do some kind of continuation
-                        //     Maybe storing the current offset into the "full code", and if the current
-                        //     offset is less than previous_source.len(), it's a continuation with a different
-                        //     prompt
-                        println!("{:?}", compile_error.with_source_code(full_source.clone()))
+                        match compile_error.downcast_ref::<ParseError>() {
+                            // If we hit a continuable error (generally, some sort of "unexpected EOF"),
+                            // preserve current_segment, skip reporting the error, and keep reading
+                            // another line.
+                            Some(parse_error) if parse_error.can_continue() => {
+                                if current_segment.ends_with("\n\n") {
+                                    // Special case: if the user enters two blank lines, record a
+                                    // history entry but discard the input without trying to
+                                    // evaluate it.
+                                    println!("I just saw two blank lines. Clearing this cell.");
+                                    let _ = rl.add_history_entry(&current_segment);
+                                    current_segment.clear();
+                                }
+                            }
+                            _ => {
+                                // If we hit a non-continuable error, report it and clear current_segment
+                                current_segment.clear();
+                                println!(
+                                    "{:?}",
+                                    compile_error.with_source_code(full_source.clone())
+                                );
+                            }
+                        }
                     }
                 }
             }
