@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::{
     chunk::Opcode,
     object::{FunctionData, Object, StringData},
-    scanner::{Scanner, SourceLocation, Token, TokenType},
+    scanner::{Scanner, SourceLocation, StringLiteralScanner, Token, TokenType},
     table::Table,
     value::Value,
     vm,
@@ -1006,10 +1006,9 @@ fn number(parser: &mut Parser, _can_assign: bool) -> Result<()> {
 }
 
 fn string(parser: &mut Parser, _can_assign: bool) -> Result<()> {
-    let string_literal = parser
-        .strings
-        .intern_string(&parser.previous.lexeme[1..(parser.previous.lexeme.len() - 1)]);
-    let const_id = parser.make_constant(Value::Object(Object::String(string_literal)))?;
+    let escaped_literal = StringLiteralScanner::from_token(parser.previous.clone()).scan()?;
+    let interned_literal = parser.strings.intern_string(&escaped_literal);
+    let const_id = parser.make_constant(Value::Object(Object::String(interned_literal)))?;
     Ok(parser.emit_bytes(&[Opcode::Constant as u8, const_id]))
 }
 

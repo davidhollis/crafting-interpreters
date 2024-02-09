@@ -288,8 +288,25 @@ impl<'a> Scanner<'a> {
     }
 
     fn scan_string(&mut self) -> Result<Token<'a>> {
-        while let Some((_, c)) = self.current_character.next_if(|(_, nc)| *nc != '"') {
-            // TODO(hollis): support escape sequences
+        let mut escaping = false;
+        while let Some((_, c)) = self.current_character.next_if(|(_, nc)| {
+            if escaping {
+                // If we were escaping, unconditionally grab the next character and we're no longer
+                // escaping. While it's true that some escape sequences span multiple characters,
+                // the only one we care about when looking for the end of the string is \".
+                escaping = false;
+                true
+            } else if *nc == '\\' {
+                // If we're not escaping and we see a backslash, start escaping and keep scanning
+                // the string literal.
+                escaping = true;
+                true
+            } else {
+                // If we're not escaping and not looking at a backslash, keep going if and only if
+                // we're not looking at a quote.
+                *nc != '"'
+            }
+        }) {
             if c == '\n' {
                 self.line += 1;
             }
@@ -368,6 +385,144 @@ impl<'a> Scanner<'a> {
     }
 }
 
+pub struct StringLiteralScanner<'a> {
+    literal: &'a str,
+    current_character: Peekable<CharIndices<'a>>,
+    literal_offset: usize,
+}
+
+impl<'a> StringLiteralScanner<'a> {
+    pub fn from_token(token: Token<'a>) -> StringLiteralScanner<'a> {
+        let literal = &token.lexeme[1..(token.lexeme.len() - 1)];
+        StringLiteralScanner {
+            literal,
+            current_character: literal.char_indices().peekable(),
+            literal_offset: token.source_offset + 1,
+        }
+    }
+
+    fn char_from_hex_str(
+        &self,
+        hex_str: &str,
+        offset: usize,
+        full_sequence: String,
+    ) -> Result<char> {
+        u32::from_str_radix(hex_str, 16)
+            .ok()
+            .and_then(char::from_u32)
+            .ok_or_else(|| {
+                let len = full_sequence.len();
+                ScannerError::InvalidEscapeSequence {
+                    sequence: full_sequence,
+                    span: (offset + self.literal_offset, len),
+                }
+                .into()
+            })
+    }
+
+    pub fn scan(self) -> Result<String> {
+        self.collect()
+    }
+}
+
+impl Iterator for StringLiteralScanner<'_> {
+    type Item = Result<char>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (current_offset, current_char) = self.current_character.next()?;
+
+        if current_char == '\\' {
+            // An escape sequence!
+            match self.current_character.next() {
+                Some((_, 'n')) => Some(Ok('\n')),
+                Some((_, 'r')) => Some(Ok('\r')),
+                Some((_, 't')) => Some(Ok('\t')),
+                Some((_, '"')) => Some(Ok('"')),
+                Some((_, '\\')) => Some(Ok('\\')),
+                Some((_, '0')) => Some(Ok('\0')),
+                // \xHH
+                Some((_, 'x')) => {
+                    match (self.current_character.next(), self.current_character.next()) {
+                        (Some((high_offset, _)), Some((low_offset, _))) => {
+                            let hex_str = &self.literal[high_offset..=low_offset];
+                            Some(self.char_from_hex_str(
+                                hex_str,
+                                current_offset,
+                                format!("\\x{hex_str}"),
+                            ))
+                        }
+                        (Some((_, ch)), None) => Some(Err(ScannerError::InvalidEscapeSequence {
+                            sequence: format!("\\x{ch}"),
+                            span: (current_offset + self.literal_offset, 3),
+                        }
+                        .into())),
+                        _ => Some(Err(ScannerError::InvalidEscapeSequence {
+                            sequence: "\\x".to_string(),
+                            span: (current_offset + self.literal_offset, 2),
+                        }
+                        .into())),
+                    }
+                }
+                // \u{H+}
+                Some((_, 'u')) => {
+                    if let Some((_, '{')) = self.current_character.next() {
+                    } else {
+                        return Some(Err(ScannerError::InvalidEscapeSequence {
+                            sequence: "\\u".to_string(),
+                            span: (current_offset + self.literal_offset, 2),
+                        }
+                        .into()));
+                    }
+
+                    let mut hex_str = String::new();
+                    while let Some((_, hex_digit)) = self
+                        .current_character
+                        .next_if(|(_, c)| c.is_ascii_hexdigit())
+                    {
+                        hex_str.push(hex_digit);
+                    }
+
+                    if let Some((_, '}')) = self.current_character.next() {
+                    } else {
+                        let sequence = format!("\\u{{{hex_str}");
+                        let len = sequence.len();
+                        return Some(Err(ScannerError::InvalidEscapeSequence {
+                            sequence,
+                            span: (current_offset + self.literal_offset, len),
+                        }
+                        .into()));
+                    }
+
+                    Some(self.char_from_hex_str(
+                        &hex_str,
+                        current_offset,
+                        format!("\\u{{{hex_str}}}"),
+                    ))
+                }
+                Some((_, ch)) => {
+                    let sequence = format!("\\{ch}");
+                    let len = sequence.len();
+                    Some(Err(ScannerError::InvalidEscapeSequence {
+                        sequence,
+                        span: (current_offset + self.literal_offset, len),
+                    }
+                    .into()))
+                }
+                None => {
+                    let sequence = format!("\\[EOF]");
+                    Some(Err(ScannerError::InvalidEscapeSequence {
+                        sequence,
+                        span: (current_offset + self.literal_offset, 1),
+                    }
+                    .into()))
+                }
+            }
+        } else {
+            Some(Ok(current_char))
+        }
+    }
+}
+
 #[derive(Error, Debug, Diagnostic)]
 pub enum ScannerError {
     #[error("unexpected character '{character}' on line {line}")]
@@ -391,4 +546,97 @@ pub enum ScannerError {
         #[source_code]
         source_code: String,
     },
+    #[error("invalid escape sequence '{sequence}'")]
+    #[diagnostic(code(scanner::invalid_escape_sequence))]
+    InvalidEscapeSequence {
+        sequence: String,
+        #[label("here")]
+        span: (usize, usize),
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use miette::Result;
+
+    use super::{StringLiteralScanner, Token, TokenType};
+
+    #[test]
+    fn it_handles_simple_escape_sequences() -> Result<()> {
+        let expected = "abc\ndef\rghi\tjkl\"mno\0pqr";
+        let test_token = Token {
+            tpe: TokenType::String,
+            lexeme: "\"abc\\ndef\\rghi\\tjkl\\\"mno\\0pqr\"",
+            source_offset: 0,
+            line: 1,
+        };
+
+        let actual = StringLiteralScanner::from_token(test_token).scan()?;
+
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn it_handles_x_escapes() -> Result<()> {
+        let expected = "abc\x7Edef";
+        let test_token = Token {
+            tpe: TokenType::String,
+            lexeme: "\"abc\\x7Edef\"",
+            source_offset: 0,
+            line: 1,
+        };
+
+        let actual = StringLiteralScanner::from_token(test_token).scan()?;
+
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn it_handles_u_escapes() -> Result<()> {
+        let expected = "abc\u{1F9C4}def";
+        let test_token = Token {
+            tpe: TokenType::String,
+            lexeme: "\"abc\\u{1F9C4}def\"",
+            source_offset: 0,
+            line: 1,
+        };
+
+        let actual = StringLiteralScanner::from_token(test_token).scan()?;
+
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn it_correctly_fails_invalid_sequences() -> () {
+        let invalid_escapes = vec![
+            "\\",              // empty sequence
+            "\\q",             // not a valid character
+            "\\xA",            // only one hex character
+            "\\xZZ",           // not a valid hex numeral
+            "\\u!",            // character right after \u isn't '{'
+            "\\u{abc!",        // wrong closing character for a \u{...} sequence
+            "\\u{AAAAAAAAAA}", // not a u32
+            "\\u{FFFFFFFF}",   // not an actual unicode character
+        ];
+
+        for invalid_example in invalid_escapes {
+            let invalid_token = Token {
+                tpe: TokenType::String,
+                lexeme: &format!("\"{invalid_example}\""),
+                source_offset: 0,
+                line: 1,
+            };
+
+            let result = StringLiteralScanner::from_token(invalid_token).scan();
+
+            assert!(
+                result.is_err(),
+                "expected {:?} to contain an invalid escape sequence",
+                invalid_example,
+            );
+        }
+    }
 }
