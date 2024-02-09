@@ -36,6 +36,7 @@ pub enum Opcode {
     Not,
     Negate,
     Print,
+    ReplPrint,
     Jump,
     JumpIfFalse,
     Loop,

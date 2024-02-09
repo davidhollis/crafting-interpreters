@@ -292,6 +292,13 @@ impl VM<Running> {
                 println!("{}", frame.pop()?.print());
                 Ok(RuntimeAction::Continue)
             }
+            Opcode::ReplPrint => {
+                let result = frame.pop()?;
+                if result != Value::Nil {
+                    println!("==>  {}", result.print());
+                }
+                Ok(RuntimeAction::Continue)
+            }
             Opcode::Jump => {
                 let distance = frame.next_u16()?;
                 frame.jump_forward(distance as usize);

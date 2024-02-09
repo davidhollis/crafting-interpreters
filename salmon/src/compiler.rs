@@ -25,7 +25,7 @@ pub fn compile_repl(
     vm_strings: &Table,
 ) -> Result<Arc<FunctionData>> {
     let mut parser =
-        Parser::new_with_strings(Scanner::new_repl(source_code, starting_at), vm_strings);
+        Parser::new_with_strings(Scanner::new_repl(source_code, starting_at), vm_strings).repl();
 
     parser.parse();
     parser.finalize()
@@ -195,6 +195,7 @@ impl CurrentClass {
 }
 
 struct Parser<'a> {
+    is_repl: bool,
     scanner: Scanner<'a>,
     previous: Token<'a>,
     current: Token<'a>,
@@ -210,6 +211,7 @@ impl<'a> Parser<'a> {
         let mut strings = Table::new();
         strings.add_all(preloaded_strings);
         Parser {
+            is_repl: false,
             scanner,
             previous: Token::empty_token(),
             current: Token::empty_token(),
@@ -219,6 +221,11 @@ impl<'a> Parser<'a> {
             errors: vec![],
             panic_mode: false,
         }
+    }
+
+    fn repl(mut self) -> Self {
+        self.is_repl = true;
+        self
     }
 
     fn parse(&mut self) -> () {
@@ -975,12 +982,15 @@ fn block_statement(parser: &mut Parser) -> Result<()> {
 
 fn expression_statement(parser: &mut Parser) -> Result<()> {
     expression(parser)?;
-    parser.consume(
-        TokenType::Semicolon,
-        "expected a ';' at the end of an expression statement",
-    )?;
-    parser.emit_byte(Opcode::Pop as u8);
-    Ok(())
+    if parser.is_repl && parser.match_token(TokenType::EOF) {
+        Ok(parser.emit_byte(Opcode::ReplPrint as u8))
+    } else {
+        parser.consume(
+            TokenType::Semicolon,
+            "expected a ';' at the end of an expression statement",
+        )?;
+        Ok(parser.emit_byte(Opcode::Pop as u8))
+    }
 }
 
 fn expression(parser: &mut Parser) -> Result<()> {

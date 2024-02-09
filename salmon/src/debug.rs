@@ -94,6 +94,7 @@ fn disassemble_instruction_at(
 ) -> Result<usize> {
     match (*chunk.byte(offset)?).try_into()? {
         Opcode::Print => render_simple_instruction("Print", offset, line),
+        Opcode::ReplPrint => render_simple_instruction("REPL Print", offset, line),
         Opcode::Jump => render_jump_instruction("Jump", true, offset, chunk, line),
         Opcode::JumpIfFalse => render_jump_instruction("Jump If False", true, offset, chunk, line),
         Opcode::Loop => render_jump_instruction("Loop", false, offset, chunk, line),
