@@ -645,14 +645,48 @@ impl VM<Running> {
                         Value::Object(Object::String(left_str)),
                     ) = (frame.pop()?, frame.pop()?)
                     {
-                        let combined_string =
-                            left_str.concatenate(right_str.as_ref(), &mut frame.strings);
+                        let combined_string = left_str.concatenate(&right_str, &mut frame.strings);
                         frame.push(Value::Object(Object::String(combined_string)))?;
                         Ok(RuntimeAction::Continue)
                     } else {
                         Err(RuntimeError::Bug {
                             message: "in Add: top two values on stack should've been strings"
                                 .to_string(),
+                            span: frame.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                } else if left_view.is(DataType::String) {
+                    if let (right_value, Value::Object(Object::String(left_str))) =
+                        (frame.pop()?, frame.pop()?)
+                    {
+                        let right_string_raw = right_value.print();
+                        let right_str = StringData::new(&right_string_raw);
+                        let combined_string = left_str.concatenate(&right_str, &mut frame.strings);
+                        frame.push(Value::Object(Object::String(combined_string)))?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        Err(RuntimeError::Bug {
+                            message: "in Add: the second value from the top of the stack should've been a string"
+                                .to_string(),
+                            span: frame.previous_opcode_location()?.span,
+                        }
+                        .into())
+                    }
+                } else if right_view.is(DataType::String) {
+                    if let (Value::Object(Object::String(right_str)), left_value) =
+                        (frame.pop()?, frame.pop()?)
+                    {
+                        let left_string_raw = left_value.print();
+                        let left_str = StringData::new(&left_string_raw);
+                        let combined_string = left_str.concatenate(&right_str, &mut frame.strings);
+                        frame.push(Value::Object(Object::String(combined_string)))?;
+                        Ok(RuntimeAction::Continue)
+                    } else {
+                        Err(RuntimeError::Bug {
+                            message:
+                                "in Add: the value on top of the stack should've been a string"
+                                    .to_string(),
                             span: frame.previous_opcode_location()?.span,
                         }
                         .into())

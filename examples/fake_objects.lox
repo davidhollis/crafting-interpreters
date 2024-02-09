@@ -26,11 +26,13 @@ fun point_add(left, right) {
     return make_point(point_x(left) + point_x(right), point_y(left) + point_y(right));
 }
 
+fun point_to_string(pt) {
+    return "(" + point_x(pt) + ", " + point_y(pt) + ")";
+}
+
 var a = make_point(1, 2);
-print "a = " + debug_closure(a);
-print "";
+print "a = " + point_to_string(a);
 var b = make_point(3, 4);
-print "b = " + debug_closure(b);
-print "";
+print "b = " + point_to_string(b);
 var c = point_add(a, b);
-print "c = " + debug_closure(c);
+print "c = " + point_to_string(c);
