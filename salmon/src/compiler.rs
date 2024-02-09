@@ -4,7 +4,7 @@ use miette::{Diagnostic, Report, Result};
 use thiserror::Error;
 
 use crate::{
-    chunk::Opcode,
+    chunk::{DebugSymbol, Opcode},
     object::{FunctionData, Object, StringData},
     scanner::{Scanner, SourceLocation, StringLiteralScanner, Token, TokenType},
     table::Table,
@@ -1089,18 +1089,29 @@ fn resolve_variable_expression(
     name_token: &Token,
     can_assign: bool,
 ) -> Result<()> {
-    let (get_op, set_op, idx) = match resolve_local(&parser.compiler, &name_token)? {
-        Some(stack_index) => (Opcode::GetLocal as u8, Opcode::SetLocal as u8, stack_index),
+    let (get_op, set_op, idx, debug_symbol) = match resolve_local(&parser.compiler, &name_token)? {
+        Some(stack_index) => (
+            Opcode::GetLocal as u8,
+            Opcode::SetLocal as u8,
+            stack_index,
+            Some(DebugSymbol::LocalVariable(
+                parser.strings.intern_string(name_token.lexeme),
+            )),
+        ),
         None => match resolve_upvalue(&mut parser.compiler, &name_token)? {
             Some(upvalue_id) => (
                 Opcode::GetUpvalue as u8,
                 Opcode::SetUpvalue as u8,
                 upvalue_id,
+                Some(DebugSymbol::LocalVariable(
+                    parser.strings.intern_string(name_token.lexeme),
+                )),
             ),
             None => (
                 Opcode::GetGlobal as u8,
                 Opcode::SetGlobal as u8,
                 parser.identifier_constant(&name_token)?,
+                None,
             ),
         },
     };
@@ -1108,9 +1119,25 @@ fn resolve_variable_expression(
     if can_assign && parser.match_token(TokenType::Equal) {
         let equal_location = parser.previous.location();
         expression(parser)?;
-        Ok(parser.emit_bytes_at(&[set_op, idx], equal_location))
+        parser.emit_bytes_at(&[set_op, idx], equal_location);
+        if let Some(symbol) = debug_symbol {
+            parser
+                .compiler
+                .compilation_unit
+                .chunk
+                .add_debug_symbol(symbol);
+        }
+        Ok(())
     } else {
-        Ok(parser.emit_bytes(&[get_op, idx]))
+        parser.emit_bytes(&[get_op, idx]);
+        if let Some(symbol) = debug_symbol {
+            parser
+                .compiler
+                .compilation_unit
+                .chunk
+                .add_debug_symbol(symbol);
+        }
+        Ok(())
     }
 }
 

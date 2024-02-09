@@ -1,8 +1,10 @@
+use std::sync::Arc;
+
 use from_u8::FromU8;
 use miette::{Diagnostic, ErrReport, Result};
 use thiserror::Error;
 
-use crate::{scanner::SourceLocation, table::Table, value::Value};
+use crate::{object::StringData, scanner::SourceLocation, table::Table, value::Value};
 
 #[repr(u8)]
 #[derive(Debug, FromU8)]
@@ -71,11 +73,29 @@ pub enum DecodeError {
     NoSuchInstruction(u8),
 }
 
+pub enum DebugSymbol {
+    LocalVariable(Arc<StringData>),
+}
+
+impl DebugSymbol {
+    pub fn to_string(&self) -> String {
+        match self {
+            DebugSymbol::LocalVariable(name) => format!("[{}]", name.to_string()),
+        }
+    }
+}
+
+pub struct DebugSymbolAt {
+    pub symbol: DebugSymbol,
+    pub offset: usize,
+}
+
 pub struct Chunk {
     code: Vec<u8>,
     locations: Vec<SourceLocation>,
     constants: Vec<Value>,
     pub strings: Table,
+    pub debug_symbols: Vec<DebugSymbolAt>,
 }
 
 impl Chunk {
@@ -85,6 +105,7 @@ impl Chunk {
             locations: vec![],
             constants: vec![],
             strings: Table::new(),
+            debug_symbols: vec![],
         }
     }
 
@@ -132,6 +153,13 @@ impl Chunk {
 
     pub fn num_constants(&self) -> usize {
         self.constants.len()
+    }
+
+    pub fn add_debug_symbol(&mut self, symbol: DebugSymbol) {
+        self.debug_symbols.push(DebugSymbolAt {
+            symbol,
+            offset: self.code.len() - 1,
+        })
     }
 }
 

@@ -22,6 +22,8 @@ pub fn disassemble_chunk_indent(name: &str, chunk: &Chunk, indent: String) -> Re
     writeln!(header, "{}=== {} ===", indent, name).into_diagnostic()?;
     out.print(&header).into_diagnostic()?;
 
+    let mut debug_symbols = chunk.debug_symbols.iter().peekable();
+
     while offset < chunk.len() {
         let mut line = out.buffer();
 
@@ -38,15 +40,25 @@ pub fn disassemble_chunk_indent(name: &str, chunk: &Chunk, indent: String) -> Re
 
         // Write out the instruction
         let new_offset = disassemble_instruction_at(chunk, offset, &mut line, &indent);
-        if new_offset.is_err() {
+        if let Ok(new_offset) = new_offset {
+            let mut color_set = false;
+            while let Some(debug_symbol) = debug_symbols.next_if(|sym| sym.offset < new_offset) {
+                if !color_set {
+                    color(&mut line, Color::Cyan)?;
+                    color_set = true;
+                }
+                write!(line, " {}", debug_symbol.symbol.to_string()).into_diagnostic()?;
+            }
+            line.reset().into_diagnostic()?;
+            writeln!(line, "").into_diagnostic()?;
+            out.print(&line).into_diagnostic()?;
+            offset = new_offset;
+        } else {
             color(&mut line, Color::Red)?;
-            writeln!(line, "! Error").into_diagnostic()?;
+            writeln!(line, "\n! Error").into_diagnostic()?;
+            out.print(&line).into_diagnostic()?;
+            return new_offset.map(|_| ());
         }
-        line.reset().into_diagnostic()?;
-        out.print(&line).into_diagnostic()?;
-
-        // Advance the pointer
-        offset = new_offset?;
     }
 
     io::stdout().flush().into_diagnostic()?;
@@ -124,7 +136,7 @@ fn disassemble_instruction_at(
 
 fn render_simple_instruction(name: &str, offset: usize, line: &mut Buffer) -> Result<usize> {
     color(line, Color::Green)?;
-    writeln!(line, "{}", name).into_diagnostic()?;
+    write!(line, "{}", name).into_diagnostic()?;
     Ok(offset + 1)
 }
 
@@ -141,7 +153,7 @@ fn render_constant(
     color(line, Color::White)?;
     write!(line, "  0x{:02x} ", const_idx).into_diagnostic()?;
     color(line, Color::Blue)?;
-    writeln!(line, "({})", chunk.constant_at(const_idx)?.show()).into_diagnostic()?;
+    write!(line, "({})", chunk.constant_at(const_idx)?.show()).into_diagnostic()?;
 
     Ok(offset + 2)
 }
@@ -157,9 +169,7 @@ fn render_local_var_instruction(
 
     let stack_idx = *chunk.byte(offset + 1)?;
     color(line, Color::White)?;
-    writeln!(line, "  0x{:02x} ", stack_idx).into_diagnostic()?;
-
-    // TODO(hollis): find a way to represent debugging symbols so we can include a local variable name here
+    write!(line, "  0x{:02x}", stack_idx).into_diagnostic()?;
 
     Ok(offset + 2)
 }
@@ -175,7 +185,7 @@ fn render_call_instruction(
 
     let arg_count = *chunk.byte(offset + 1)?;
     color(line, Color::White)?;
-    writeln!(line, "  /{} ", arg_count).into_diagnostic()?;
+    write!(line, "  /{} ", arg_count).into_diagnostic()?;
 
     Ok(offset + 2)
 }
@@ -194,7 +204,7 @@ fn render_invoke_instruction(
     color(line, Color::White)?;
     write!(line, "  0x{:02x} /{} ", method_name_idx, arg_count).into_diagnostic()?;
     color(line, Color::Blue)?;
-    writeln!(line, "(.{})", chunk.constant_at(method_name_idx)?.print()).into_diagnostic()?;
+    write!(line, "(.{})", chunk.constant_at(method_name_idx)?.print()).into_diagnostic()?;
 
     Ok(offset + 3)
 }
@@ -221,7 +231,7 @@ fn render_jump_instruction(
     color(line, Color::White)?;
     write!(line, " {:5} ", jump).into_diagnostic()?;
     color(line, Color::Blue)?;
-    writeln!(line, "(-> {})", destination).into_diagnostic()?;
+    write!(line, "(-> {})", destination).into_diagnostic()?;
 
     Ok(offset + 3)
 }
@@ -241,7 +251,7 @@ fn render_closure_instruction(
     write!(line, "  0x{:02x} ", const_idx).into_diagnostic()?;
     color(line, Color::Blue)?;
     let function = chunk.constant_at(const_idx)?;
-    writeln!(line, "({})", function.show()).into_diagnostic()?;
+    write!(line, "({})", function.show()).into_diagnostic()?;
 
     if let Value::Object(Object::Function(function_data)) = function {
         let upvalue_count = function_data.upvalue_count;
@@ -252,11 +262,11 @@ fn render_closure_instruction(
 
             line.set_color(ColorSpec::new().set_fg(Some(Color::White)).set_dimmed(true))
                 .into_diagnostic()?;
-            write!(line, "{}{:04}      ", indent, offset).into_diagnostic()?;
+            write!(line, "\n{}{:04}      ", indent, offset).into_diagnostic()?;
             color(line, Color::Green)?;
             write!(line, "|                      ").into_diagnostic()?;
             color(line, Color::Blue)?;
-            writeln!(
+            write!(
                 line,
                 "{:-7} @{}",
                 if *is_local > 0 { "local" } else { "upvalue" },
@@ -310,12 +320,18 @@ impl Tracer for DisassemblingTracer {
                 write!(self.line_buffer, "[ {} ]", v.show()).unwrap();
             }
         }
-        self.line_buffer.reset().unwrap();
-        writeln!(self.line_buffer, "").unwrap();
+
+        // Write out the chunk offset and line number
+        self.line_buffer
+            .set_color(ColorSpec::new().set_fg(Some(Color::White)).set_dimmed(true))
+            .unwrap();
+        write!(self.line_buffer, "\n{:04}      ", offset).unwrap();
         let res = disassemble_instruction_at(chunk, offset, &mut self.line_buffer, "");
         if res.is_err() {
             color(&mut self.line_buffer, Color::Red).unwrap();
-            writeln!(self.line_buffer, "! Error").unwrap();
+            writeln!(self.line_buffer, "\n! Error").unwrap();
+        } else {
+            writeln!(self.line_buffer, "").unwrap();
         }
         self.line_buffer.reset().unwrap();
         self.out.print(&self.line_buffer).unwrap();
