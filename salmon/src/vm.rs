@@ -770,6 +770,13 @@ impl VM<Running> {
         }
     }
 
+    fn pop_to_stack_offset(&mut self, stack_offset: usize) -> () {
+        while self.state.stack_offset > stack_offset {
+            self.state.stack_offset -= 1;
+            self.state.stack[self.state.stack_offset] = Value::Nil;
+        }
+    }
+
     fn pop_frame(&mut self) -> Result<()> {
         let mut popped_frame =
             self.state.frames.pop().ok_or_else(|| {
@@ -787,11 +794,7 @@ impl VM<Running> {
         }
         .close_upvalues_beyond(popped_frame_stack_offset);
 
-        // Pop the function and its arguments from the stack.
-        while self.state.stack_offset > popped_frame.stack_offset {
-            self.state.stack_offset -= 1;
-            self.state.stack[self.state.stack_offset] = Value::Nil;
-        }
+        self.pop_to_stack_offset(popped_frame.stack_offset);
 
         Ok(())
     }
@@ -832,11 +835,7 @@ impl VM<Running> {
                 let args = &self.state.stack[(native_frame_offset + 1)..self.state.stack_offset];
                 let return_value = (native.function)(arg_count, args)?;
 
-                // TODO(hollis): factor this "pop all the arguments and push the return value" behavior
-                while self.state.stack_offset > native_frame_offset {
-                    self.state.stack_offset -= 1;
-                    self.state.stack[self.state.stack_offset] = Value::Nil;
-                }
+                self.pop_to_stack_offset(native_frame_offset);
 
                 self.state.stack[self.state.stack_offset] = return_value;
                 self.state.stack_offset += 1;
